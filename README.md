@@ -2,9 +2,9 @@
 
 English | [简体中文](README_zh.md)
 
-Extension sandbox backends for the [agentScope](https://github.com/agentscope-ai/agentscope) framework — **Firecracker microVM**, **gVisor (runsc)** and **Kata Containers**.
+Extension sandbox backends for the [agentScope](https://github.com/agentscope-ai/agentscope) framework — **Firecracker microVM**, **gVisor (runsc)**, **Kata Containers** and **Sysbox**.
 
-This package adds three new sandboxed-workspace backends **without modifying any agentscope native code**. Everything is composed by inheritance from agentscope's own (documented-subclassing) abstractions:
+This package adds four new sandboxed-workspace backends **without modifying any agentscope native code**. Everything is composed by inheritance from agentscope's own (documented-subclassing) abstractions:
 
 - [`agentscope.workspace._sandboxed_base.SandboxedWorkspaceBase`](https://github.com/agentscope-ai/agentscope/blob/main/src/agentscope/workspace/_sandboxed_base.py) — the in-sandbox MCP-gateway template-method lifecycle.
 - [`agentscope.app.workspace_manager._base.WorkspaceManagerBase`](https://github.com/agentscope-ai/agentscope/blob/main/src/agentscope/app/workspace_manager/_base.py) — the manager interface `agentscope.app` calls into.
@@ -18,15 +18,16 @@ Each workspace inherits from a single `SandboxedWorkspaceExtBase` so a managemen
 | **Firecracker** | `firecracker` | KVM-grade microVM, separate kernel | ~125 ms to guest init | Strongest isolation, multi-tenant, untrusted code |
 | **gVisor (runsc)** | `gvisor` | Application-level kernel (Sentry intercepts syscalls) | Container-fast | Strong isolation without VM overhead |
 | **Kata Containers** | `kata` | Hardware-VM-backed container (Firecracker/QEMU hypervisor) | ~1 s | VM-grade isolation with container ergonomics |
+| **Sysbox** | `sysbox` | Docker runtime with per-container user/mount namespaces, virtualised `/proc` `/sys`, Docker-in-Docker without `--privileged` | Container-fast | Nested container workloads, stronger-than-runc isolation without a VM |
 
-agentScope already ships Docker, E2B, K8s, Apple Container, Bubblewrap, Daytona and OpenSandbox backends — this package fills the gaps with the three mainstream VM/sandbox runtimes the framework does not yet cover, starting from the lightest and most popular (Firecracker).
+agentScope already ships Docker, E2B, K8s, Apple Container, Bubblewrap, Daytona and OpenSandbox backends — this package fills the gaps with the four mainstream VM/sandbox runtimes the framework does not yet cover, starting from the lightest and most popular (Firecracker).
 
 ## Highlights
 
 - **No native code modification.** Only imports from agentscope. Drops into any agentscope `>=2.0.5` install.
 - **Unified extension interface.** `SandboxedWorkspaceExtBase` + `SandboxExtManagerBase` give a single `isinstance` discriminator, a `metrics()` hook, and a `verify_runtime_available()` probe that every backend implements.
-- **Pooling optimisation.** `SandboxPool` keeps `min_warm` sandboxes hot, evicts idle ones past `idle_ttl`, and caps the warm pool at `max_size`. Each manager can compose it in front of its cache.
-- **Real tests, no mocking.** The guest-agent wire protocol is exercised end-to-end against the exact handler source string that ships into the microVM (run on a Unix socket in CI since AF_VSOCK is unavailable). The Firecracker REST API client is driven against a real Unix-socket HTTP server. 90 tests, 0 mocks.
+- **Pooling optimisation.** `SandboxPool` keeps `min_warm` sandboxes hot, evicts idle ones past `idle_ttl`, and caps the warm pool at `max_size`. Each manager can compose it in front of its cache. Tunable `acquire_strategy` (`fifo`/`lifo`), optional `health_check` probe on acquire, and `max_concurrent_provisions` semaphore to prevent thundering-herd boots. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for the full analysis.
+- **Real tests, no mocking.** The guest-agent wire protocol is exercised end-to-end against the exact handler source string that ships into the microVM (run on a Unix socket in CI since AF_VSOCK is unavailable). The Firecracker REST API client is driven against a real Unix-socket HTTP server. 120+ tests, 0 mocks.
 
 ## Quickstart
 
@@ -67,20 +68,20 @@ asyncio.run(main())
                  │  WorkspaceManagerBase  ← SandboxExtManagerBase
                  └───────────────┬─────────────────────────────┘
                                  │  get_workspace / close / close_all
-        ┌────────────────────────┼────────────────────────┐
-        ▼                        ▼                        ▼
-┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐
-│ FirecrackerMgr   │   │  GVisorMgr       │   │   KataMgr        │
-│  + SandboxPool    │   │  + SandboxPool   │   │   + SandboxPool   │
-└────────┬─────────┘   └────────┬─────────┘   └────────┬─────────┘
-         │                      │                      │
-         ▼                      ▼                      ▼
-┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐
-│FirecrackerWorkspace│  │ GVisorWorkspace  │   │  KataWorkspace    │
-│  (microVM + vsock) │   │  (Docker + runsc)│   │  (Docker + kata)  │
-└────────┬─────────┘   └────────┬─────────┘   └────────┬─────────┘
-         │                      │                      │
-         ▼                      ▼                      ▼
+   ┌─────────────────────────────┼─────────────────────────────┐
+   ▼                             ▼                             ▼
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ FirecrackerMgr   │    │  GVisorMgr       │    │   KataMgr        │    │  SysboxMgr       │
+│  + SandboxPool    │    │  + SandboxPool   │    │   + SandboxPool   │    │  + SandboxPool   │
+└────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘
+         │                       │                       │                       │
+         ▼                       ▼                       ▼                       ▼
+┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐
+│FirecrackerWorkspace│  │ GVisorWorkspace  │   │  KataWorkspace    │   │  SysboxWorkspace │
+│  (microVM + vsock) │   │  (Docker + runsc)│   │  (Docker + kata)  │   │  (Docker + sysbox)│
+└────────┬─────────┘   └────────┬─────────┘   └────────┬─────────┘   └────────┬─────────┘
+         │                       │                       │                       │
+         ▼                       ▼                       ▼                       ▼
    SandboxedWorkspaceExtBase  (sandbox_kind + metrics + verify_runtime_available)
          │
          ▼
@@ -106,15 +107,16 @@ ls /var/lib/firecracker/vmlinux /var/lib/firecracker/rootfs.ext4
 
 The in-VM guest agent (`src/agentscope_sandbox_ext/_firecracker/_guest_agent.py`) must be baked into the rootfs at `/root/.agentscope/_guest_agent.py` and started by init. The `tools/build-rootfs.sh` helper does this.
 
-## gVisor / Kata prerequisites
+## gVisor / Kata / Sysbox prerequisites
 
-gVisor and Kata are Docker *runtimes* — register them in `/etc/docker/daemon.json`:
+gVisor, Kata and Sysbox are Docker *runtimes* — register them in `/etc/docker/daemon.json`:
 
 ```json
 {
   "runtimes": {
     "runsc": { "path": "/usr/bin/runsc" },
-    "kata-fc": { "path": "/usr/bin/kata-fc" }
+    "kata-fc": { "path": "/usr/bin/kata-fc" },
+    "sysbox-runc": { "path": "/usr/bin/sysbox-runc" }
   }
 }
 ```

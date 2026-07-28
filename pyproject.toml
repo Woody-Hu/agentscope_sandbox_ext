@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "agentscope-sandbox-ext"
 version = "0.1.0"
-description = "Extension sandbox backends (Firecracker microVM, gVisor, Kata Containers) for the agentScope framework, built on its native plugin and interface mechanisms."
+description = "Extension sandbox backends (Firecracker microVM, gVisor, Kata Containers, Sysbox) for the agentScope framework, built on its native plugin and interface mechanisms."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Woody-Hu" }]
-keywords = ["agentscope", "sandbox", "firecracker", "microvm", "gvisor", "kata", "extension"]
+keywords = ["agentscope", "sandbox", "firecracker", "microvm", "gvisor", "kata", "sysbox", "extension"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: AsyncIO",

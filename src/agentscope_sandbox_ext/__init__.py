@@ -75,6 +75,7 @@ from ._firecracker import (
 )
 from ._gvisor import GVisorWorkspace, GVisorWorkspaceManager
 from ._kata import KataWorkspace, KataWorkspaceManager
+from ._sysbox import SysboxWorkspace, SysboxWorkspaceManager
 from ._pool import SandboxPool
 
 # Re-export IsolationPolicy so callers do not need to reach into
@@ -103,5 +104,8 @@ __all__ = [
     # Kata
     "KataWorkspace",
     "KataWorkspaceManager",
+    # Sysbox
+    "SysboxWorkspace",
+    "SysboxWorkspaceManager",
     "__version__",
 ]
