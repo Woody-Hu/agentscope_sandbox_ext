@@ -33,6 +33,11 @@ from agentscope_sandbox_ext._kata import (
     KataWorkspace,
     KataWorkspaceManager,
 )
+from agentscope_sandbox_ext._sysbox import (
+    SYSBOX_DEFAULT_RUNTIME_NAME,
+    SysboxWorkspace,
+    SysboxWorkspaceManager,
+)
 from agentscope_sandbox_ext._firecracker import (
     FirecrackerWorkspace,
     FirecrackerWorkspaceManager,
@@ -122,6 +127,26 @@ def test_kata_workspace_is_ext_subclass():
     assert issubclass(KataWorkspace, SandboxedWorkspaceExtBase)
 
 
+# ── Sysbox inherits DockerWorkspace ────────────────────────────
+
+
+def test_sysbox_workspace_subclasses_docker_workspace():
+    """``SysboxWorkspace`` is a subclass of ``DockerWorkspace`` so it
+    inherits the full image-build / bind-mount / gateway-bootstrap flow."""
+    from agentscope.workspace import DockerWorkspace
+    assert issubclass(SysboxWorkspace, DockerWorkspace)
+
+
+def test_sysbox_workspace_is_ext_subclass():
+    """``SysboxWorkspace`` is also a ``SandboxedWorkspaceExtBase``."""
+    assert issubclass(SysboxWorkspace, SandboxedWorkspaceExtBase)
+
+
+def test_sysbox_workspace_has_correct_sandbox_kind():
+    """``SysboxWorkspace.sandbox_kind`` is ``"sysbox"``."""
+    assert SysboxWorkspace.sandbox_kind == "sysbox"
+
+
 # ── gVisor constructor ───────────────────────────────────────
 
 
@@ -165,6 +190,34 @@ def test_kata_workspace_accepts_custom_runtime():
     assert ws._runtime == "kata-qemu"
 
 
+# ── Sysbox constructor ───────────────────────────────────────
+
+
+def test_sysbox_workspace_default_runtime_is_sysbox_runc():
+    """The default runtime for ``SysboxWorkspace`` is ``sysbox-runc``."""
+    ws = SysboxWorkspace()
+    assert ws._runtime == SYSBOX_DEFAULT_RUNTIME_NAME == "sysbox-runc"
+
+
+def test_sysbox_workspace_accepts_custom_runtime():
+    """A custom runtime name can be supplied (for non-standard installs)."""
+    ws = SysboxWorkspace(runtime="sysbox")
+    assert ws._runtime == "sysbox"
+
+
+def test_sysbox_workspace_inherits_docker_config():
+    """``SysboxWorkspace`` inherits the Docker workspace's serialisable
+    config (base_image, host_workdir, ...)."""
+    ws = SysboxWorkspace(
+        base_image="python:3.12-slim",
+        host_workdir="/tmp/as-sysbox-test",
+        gateway_port=7777,
+    )
+    assert ws.base_image == "python:3.12-slim"
+    assert ws.host_workdir == "/tmp/as-sysbox-test"
+    assert ws.gateway_port == 7777
+
+
 # ── manager construction ────────────────────────────────────
 
 
@@ -184,6 +237,26 @@ def test_kata_manager_construction():
         isolation=IsolationPolicy.PER_AGENT,
     )
     assert mgr.backend_kind == "kata"
+
+
+def test_sysbox_manager_construction():
+    """``SysboxWorkspaceManager`` builds and exposes ``backend_kind``."""
+    mgr = SysboxWorkspaceManager(
+        basedir="/tmp/as-sysbox-mgr-test",
+        isolation=IsolationPolicy.PER_AGENT,
+    )
+    assert mgr.backend_kind == "sysbox"
+
+
+def test_sysbox_manager_propagates_runtime():
+    """The ``runtime`` arg is stored on the manager and threaded into
+    workspaces via ``_make_workspace``."""
+    mgr = SysboxWorkspaceManager(
+        basedir="/tmp/as-sysbox-mgr-test",
+        isolation=IsolationPolicy.PER_AGENT,
+        runtime="sysbox",
+    )
+    assert mgr._runtime == "sysbox"
 
 
 def test_firecracker_manager_construction():
@@ -216,6 +289,14 @@ async def test_kata_verify_runtime_raises_when_docker_missing():
         await KataWorkspace.verify_runtime_available()
 
 
+@pytest.mark.skipif(_DOCKER_AVAILABLE, reason="Docker is installed; probe should succeed or detect missing runtime")
+async def test_sysbox_verify_runtime_raises_when_docker_missing():
+    """When ``docker`` is not on ``$PATH`` the probe raises
+    :class:`RuntimeError`."""
+    with pytest.raises((RuntimeError, FileNotFoundError, OSError)):
+        await SysboxWorkspace.verify_runtime_available()
+
+
 @pytest.mark.skipif(not _DOCKER_AVAILABLE, reason="Docker not installed; cannot exercise the runtime-list parse path")
 async def test_gvisor_verify_runtime_raises_when_runsc_not_registered():
     """When Docker is present but ``runsc`` is not registered the probe
@@ -243,6 +324,21 @@ async def test_kata_verify_runtime_raises_when_no_kata_runtime():
         assert "kata" in str(exc).lower() or "runtime" in str(exc).lower()
     else:
         pytest.skip("a Kata runtime is registered on this host")
+
+
+@pytest.mark.skipif(not _DOCKER_AVAILABLE, reason="Docker not installed; cannot exercise the runtime-list parse path")
+async def test_sysbox_verify_runtime_raises_when_no_sysbox_runtime():
+    """When Docker is present but no Sysbox runtime is registered the
+    probe raises a descriptive :class:`RuntimeError`.
+
+    This exercises the real JSON parse of ``docker info`` output and
+    the candidate-list probing logic (``sysbox-runc`` then ``sysbox``)."""
+    try:
+        await SysboxWorkspace.verify_runtime_available()
+    except RuntimeError as exc:
+        assert "sysbox" in str(exc).lower() or "runtime" in str(exc).lower()
+    else:
+        pytest.skip("a Sysbox runtime is registered on this host")
 
 
 # ── Firecracker verify_runtime (real firecracker binary) ────
