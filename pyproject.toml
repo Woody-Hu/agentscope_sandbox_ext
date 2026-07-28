@@ -1,0 +1,80 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentscope-sandbox-ext"
+version = "0.1.0"
+description = "Extension sandbox backends (Firecracker microVM, gVisor, Kata Containers) for the agentScope framework, built on its native plugin and interface mechanisms."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Woody-Hu" }]
+keywords = ["agentscope", "sandbox", "firecracker", "microvm", "gvisor", "kata", "extension"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Emulators",
+]
+dependencies = [
+    # The host framework we extend. We must NOT modify agentscope's source;
+    # we only import from it. The [app] extra pulls in fastapi / apscheduler
+    # which the agentscope.app.workspace_manager module imports at load time.
+    "agentscope[app]>=2.0.5",
+    # Async HTTP over Unix-domain sockets — Firecracker REST API transport.
+    "httpx>=0.27",
+    # Async file I/O (mirrors agentscope's own dependency).
+    "aiofiles>=23.0",
+]
+
+[project.optional-dependencies]
+firecracker = [
+    # No extra deps: pure stdlib + httpx for the Firecracker API + vsock guest agent.
+]
+docker-runtime = [
+    # gVisor/Kata reuse the agentscope DockerWorkspace, which already needs aiodocker.
+    "aiodocker>=0.23",
+]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "aiohttp>=3.9",  # used by the test harness to spin up a real Unix-socket HTTP server
+]
+
+[project.urls]
+Homepage = "https://github.com/Woody-Hu/agentscope_sandbox_ext"
+Repository = "https://github.com/Woody-Hu/agentscope_sandbox_ext"
+Issues = "https://github.com/Woody-Hu/agentscope_sandbox_ext/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentscope_sandbox_ext"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/agentscope_sandbox_ext",
+    "tests",
+    "README.md",
+    "README_zh.md",
+    "docs",
+    "pyproject.toml",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests that require a real sandbox runtime (firecracker, runsc, kata-runtime, docker) to be installed and may be skipped on hosts without them",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
