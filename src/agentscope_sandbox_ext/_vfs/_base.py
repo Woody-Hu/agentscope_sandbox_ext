@@ -34,6 +34,7 @@ from typing import Any
 from agentscope._logging import logger
 from agentscope.mcp import MCPClient
 from agentscope.tool._builtin._backend import BackendBase, ExecResult
+from agentscope.workspace._docker._make_dockerfile import GATEWAY_HOME
 
 from .._base import SandboxedWorkspaceExtBase
 
@@ -143,6 +144,18 @@ class VFSWorkspaceBase(SandboxedWorkspaceExtBase):
     #: typically override this with a per-workspace path.
     sandbox_kind: str = "vfs"
 
+    #: Agent-visible root directory inside the virtual workspace.
+    #: Mirrors the container convention (``/workspace``) so the
+    #: inherited workspace-layout machinery (``data/``, ``skills/``,
+    #: ``sessions/``, ``.mcp``) works unchanged.
+    workdir: str = "/workspace"
+
+    #: Directory holding the gateway venv / script / log inside the
+    #: virtual workspace.  Reused from the Docker backend so the
+    #: inherited gateway-bootstrap template methods find the same
+    #: paths.
+    _gateway_home: str = GATEWAY_HOME
+
     def __init__(
         self,
         *,
@@ -184,18 +197,44 @@ class VFSWorkspaceBase(SandboxedWorkspaceExtBase):
 
     # ── SandboxedWorkspaceBase template-method hooks ────────────
 
-    def _bootstrap_commands(self) -> list[str]:
-        """No guest agent / image bootstrap for VFS workspaces."""
-        return []
+    async def initialize(self) -> None:
+        """Provision the VFS backend and set up the workspace layout.
+
+        Overrides :meth:`SandboxedWorkspaceBase.initialize` to skip the
+        MCP gateway setup — a VFS workspace has no in-sandbox gateway
+        process, so the gateway bootstrap / health-poll path does not
+        apply.  Everything else (provision backend, ensure workspace
+        layout, seed skills) runs unchanged.
+
+        Idempotent — a no-op when already alive.
+        """
+        if self.is_alive:
+            return
+        await self._provision_backend()
+        assert (
+            self._backend is not None
+        ), "_provision_backend must set self._backend before returning"
+        await self._ensure_workspace_layout()
+        await self._setup_skills()
+        self.is_alive = True
 
     async def _provision_backend(self) -> None:
-        """Instantiate the VFS backend (microsecond-cheap)."""
+        """Instantiate the VFS backend (microsecond-cheap).
+
+        ``SandboxedWorkspaceBase`` requires that subclasses set
+        ``self._backend`` to a :class:`BackendBase` instance before
+        returning from ``_provision_backend``; we bind it to the VFS
+        backend so the inherited template-method lifecycle
+        (``initialize`` → ``get_backend`` → ... → ``close``) works
+        unchanged.
+        """
         if self._vfs_backend is None:
             logger.debug(
                 "VFSWorkspace: provisioning backend in %s",
                 self._host_workdir,
             )
             self._vfs_backend = await self._make_backend(self._host_workdir)
+        self._backend = self._vfs_backend
 
     async def _teardown_backend(self) -> None:
         """Close the VFS backend; leaves host_workdir on disk."""
