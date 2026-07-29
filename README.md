@@ -2,9 +2,9 @@
 
 English | [简体中文](README_zh.md)
 
-Extension sandbox backends for the [agentScope](https://github.com/agentscope-ai/agentscope) framework — **Firecracker microVM**, **gVisor (runsc)**, **Kata Containers** and **Sysbox**.
+Extension sandbox backends for the [agentScope](https://github.com/agentscope-ai/agentscope) framework — **Firecracker microVM**, **gVisor (runsc)**, **Kata Containers**, **Sysbox**, and the new **VFS / agentfs** zero-runtime backend.
 
-This package adds four new sandboxed-workspace backends **without modifying any agentscope native code**. Everything is composed by inheritance from agentscope's own (documented-subclassing) abstractions:
+This package adds five new sandboxed-workspace backends **without modifying any agentscope native code**. Everything is composed by inheritance from agentscope's own (documented-subclassing) abstractions:
 
 - [`agentscope.workspace._sandboxed_base.SandboxedWorkspaceBase`](https://github.com/agentscope-ai/agentscope/blob/main/src/agentscope/workspace/_sandboxed_base.py) — the in-sandbox MCP-gateway template-method lifecycle.
 - [`agentscope.app.workspace_manager._base.WorkspaceManagerBase`](https://github.com/agentscope-ai/agentscope/blob/main/src/agentscope/app/workspace_manager/_base.py) — the manager interface `agentscope.app` calls into.
@@ -19,6 +19,7 @@ Each workspace inherits from a single `SandboxedWorkspaceExtBase` so a managemen
 | **gVisor (runsc)** | `gvisor` | Application-level kernel (Sentry intercepts syscalls) | Container-fast | Strong isolation without VM overhead |
 | **Kata Containers** | `kata` | Hardware-VM-backed container (Firecracker/QEMU hypervisor) | ~1 s | VM-grade isolation with container ergonomics |
 | **Sysbox** | `sysbox` | Docker runtime with per-container user/mount namespaces, virtualised `/proc` `/sys`, Docker-in-Docker without `--privileged` | Container-fast | Nested container workloads, stronger-than-runc isolation without a VM |
+| **VFS / agentfs** | `agentfs` | None — translates `BackendBase` primitives to host I/O + subprocess confined to a per-workspace dir | ~microseconds | CI / dev / benchmark baseline; trusted code that only needs a clean workdir |
 
 agentScope already ships Docker, E2B, K8s, Apple Container, Bubblewrap, Daytona and OpenSandbox backends — this package fills the gaps with the four mainstream VM/sandbox runtimes the framework does not yet cover, starting from the lightest and most popular (Firecracker).
 
@@ -26,8 +27,9 @@ agentScope already ships Docker, E2B, K8s, Apple Container, Bubblewrap, Daytona 
 
 - **No native code modification.** Only imports from agentscope. Drops into any agentscope `>=2.0.5` install.
 - **Unified extension interface.** `SandboxedWorkspaceExtBase` + `SandboxExtManagerBase` give a single `isinstance` discriminator, a `metrics()` hook, and a `verify_runtime_available()` probe that every backend implements.
-- **Pooling optimisation.** `SandboxPool` keeps `min_warm` sandboxes hot, evicts idle ones past `idle_ttl`, and caps the warm pool at `max_size`. Each manager can compose it in front of its cache. Tunable `acquire_strategy` (`fifo`/`lifo`), optional `health_check` probe on acquire, and `max_concurrent_provisions` semaphore to prevent thundering-herd boots. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for the full analysis.
-- **Real tests, no mocking.** The guest-agent wire protocol is exercised end-to-end against the exact handler source string that ships into the microVM (run on a Unix socket in CI since AF_VSOCK is unavailable). The Firecracker REST API client is driven against a real Unix-socket HTTP server. 120+ tests, 0 mocks.
+- **Pooling optimisation.** `SandboxPool` keeps `min_warm` sandboxes hot, evicts idle ones past `idle_ttl`, and caps the warm pool at `max_size`. Each manager can compose it in front of its cache. Tunable `acquire_strategy` (`fifo`/`lifo`), optional `health_check` probe on acquire, and `max_concurrent_provisions` semaphore to prevent thundering-herd boots. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for the full analysis and [`docs/VFS.md`](docs/VFS.md) for the benchmark results that quantify each knob.
+- **VFS translation layer.** `VFSBackendBase` / `VFSWorkspaceBase` give a ~50-line path to a new backend that translates the three `BackendBase` primitives to anything (host I/O, in-memory tree, 9p, FUSE, ...). The shipped `agentfs` reference impl is the natural "theoretical upper bound" baseline for benchmarks and a zero-runtime CI / dev backend.
+- **Real tests, no mocking.** The guest-agent wire protocol is exercised end-to-end against the exact handler source string that ships into the microVM (run on a Unix socket in CI since AF_VSOCK is unavailable). The Firecracker REST API client is driven against a real Unix-socket HTTP server. 150+ tests, 0 mocks.
 
 ## Quickstart
 
