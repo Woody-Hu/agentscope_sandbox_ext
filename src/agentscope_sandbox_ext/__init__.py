@@ -76,6 +76,12 @@ from ._firecracker import (
 from ._gvisor import GVisorWorkspace, GVisorWorkspaceManager
 from ._kata import KataWorkspace, KataWorkspaceManager
 from ._sysbox import SysboxWorkspace, SysboxWorkspaceManager
+from ._vfs import (
+    AgentFSBackend,
+    AgentFSWorkspace,
+    VFSBackendBase,
+    VFSWorkspaceBase,
+)
 from ._pool import SandboxPool
 
 # Re-export IsolationPolicy so callers do not need to reach into
@@ -107,5 +113,10 @@ __all__ = [
     # Sysbox
     "SysboxWorkspace",
     "SysboxWorkspaceManager",
+    # VFS
+    "VFSBackendBase",
+    "VFSWorkspaceBase",
+    "AgentFSBackend",
+    "AgentFSWorkspace",
     "__version__",
 ]

@@ -1,0 +1,64 @@
+{
+  "config": {
+    "warmup": 10,
+    "iters": 300,
+    "concurrency": 8
+  },
+  "results": [
+    {
+      "name": "direct",
+      "cold_acquire_ms": 6.387102999724448,
+      "hot_acquire_ms": 6.387102999724448,
+      "exec_ms": 3.0838489983580075,
+      "release_ms": 0.0,
+      "steady_ops_per_s": 21.91514206510068,
+      "p50_acquire_ms": 46.29161699995166,
+      "p95_acquire_ms": 51.37601280075614,
+      "p99_acquire_ms": 58.446740958715964
+    },
+    {
+      "name": "pool-fifo",
+      "cold_acquire_ms": 6.506016998173436,
+      "hot_acquire_ms": 0.0014350007404573262,
+      "exec_ms": 3.6044699991180096,
+      "release_ms": 0.0018280006770510226,
+      "steady_ops_per_s": 62.364152231747475,
+      "p50_acquire_ms": 16.72578000034264,
+      "p95_acquire_ms": 21.26516840216937,
+      "p99_acquire_ms": 39.536628078967595
+    },
+    {
+      "name": "pool-lifo",
+      "cold_acquire_ms": 6.347145001200261,
+      "hot_acquire_ms": 0.0013790013326797634,
+      "exec_ms": 3.3887069985212293,
+      "release_ms": 0.0020240004232618958,
+      "steady_ops_per_s": 57.46332203408048,
+      "p50_acquire_ms": 18.390682500466937,
+      "p95_acquire_ms": 21.37272479976673,
+      "p99_acquire_ms": 40.98688334244796
+    },
+    {
+      "name": "prewarm",
+      "cold_acquire_ms": 6.391743998392485,
+      "hot_acquire_ms": 0.0012759992387145758,
+      "exec_ms": 3.3706139984133188,
+      "release_ms": 0.0015660007193218917,
+      "steady_ops_per_s": 59.573861555856325,
+      "p50_acquire_ms": 17.480304499258636,
+      "p95_acquire_ms": 22.19734874797723,
+      "p99_acquire_ms": 41.95616587840046
+    },
+    {
+      "name": "prewarm+ratelimit",
+      "cold_acquire_ms": 7.51164599932963,
+      "hot_acquire_ms": 0.0012230011634528637,
+      "exec_ms": 3.5110790013277438,
+      "release_ms": 0.001648997567826882,
+      "steady_ops_per_s": 44.89091107752267,
+      "p50_acquire_ms": 21.113127999342396,
+      "p95_acquire_ms": 29.271168751256482,
+      "p99_acquire_ms": 74.29701021777855
+    }
+  ]
+}
