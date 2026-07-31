@@ -97,6 +97,99 @@ class SandboxedWorkspaceExtBase(SandboxedWorkspaceBase):
             "workspace_id": self.workspace_id,
         }
 
+    # ── snapshot / restore ──────────────────────────────────────
+    #
+    # Borrowed from E2B ``createSnapshot``/``connect(snapshotId)``,
+    # gVisor ``Checkpoint``/``Restore``, Firecracker
+    # ``PUT /snapshot/create``/``PUT /snapshot/load`` and the
+    # containerd Prepare/Active/Commit snapshotter state machine —
+    # see ``docs/SNAPSHOT.md`` for the full survey and design closure.
+    #
+    # The default implementations raise :class:`NotImplementedError`
+    # so backends that have no native snapshot primitive (e.g. a
+    # future ``memoryfs``) keep working unchanged; backends that do
+    # (VFS today; Firecracker/gVisor natively later) override
+    # :meth:`snapshot` / :meth:`restore` (or the ``_snapshot_to`` /
+    # ``_restore_from`` hooks on :class:`VFSWorkspaceBase`).
+    #
+    # The split mirrors :meth:`verify_runtime_available`: a uniform
+    # surface on the base, opt-in support per backend.
+
+    async def snapshot(self, tag: str) -> str:
+        """Write a durable snapshot of the workspace state under *tag*.
+
+        A snapshot captures the *file tree* (and, on backends that
+        support it, in-process / in-VM state) so a later
+        :meth:`restore` can roll the workspace back to this point
+        without paying the cold-boot + seed + setup cost again.  This
+        is the dominant rollback primitive for iterative agent
+        workflows (try a change → test → roll back to the known-good
+        snapshot).
+
+        The snapshot is identified by *tag*; calling :meth:`snapshot`
+        with an existing tag replaces it (backends write to a temp
+        sibling and rename into place, so a crash mid-snapshot never
+        corrupts an existing tag).  The snapshot outlives the
+        workspace that created it — it is *not* torn down by
+        :meth:`close`.
+
+        Backends without a snapshot primitive raise
+        :class:`NotImplementedError`.  The default implementation
+        does so, so the API is uniform across every
+        :class:`SandboxedWorkspaceExtBase` subclass: callers can
+        ``try: await ws.snapshot(t) except NotImplementedError: ...``
+        to degrade gracefully on backends that do not support it.
+
+        Args:
+            tag (`str`):
+                Stable identifier for the snapshot.  Namespaced per
+                workspace — the same tag on two different workspaces
+                is independent.
+
+        Returns:
+            `str`:
+                Backend-specific path / identifier of the snapshot
+                artifact.  Callers do not need to interpret it; pass
+                it back to :meth:`restore`.
+
+        Raises:
+            NotImplementedError: If this backend does not support
+                snapshots (the default).
+            RuntimeError: If the workspace is not alive.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support snapshots "
+            f"(sandbox_kind={self.sandbox_kind!r}). Override "
+            f"`snapshot` / `restore` to enable."
+        )
+
+    async def restore(self, tag: str) -> None:
+        """Reset the workspace state to the snapshot identified by *tag*.
+
+        The current file tree is wiped and replaced with the
+        snapshot's.  The workspace stays alive — no re-provision, no
+        re-seed, no gateway restart — so this is the cheap rollback
+        path for iterative agent workflows.
+
+        The snapshot itself is preserved by the restore (so the same
+        tag can be restored repeatedly, e.g. for A/B trial branches).
+
+        Args:
+            tag (`str`):
+                Identifier previously passed to :meth:`snapshot`.
+
+        Raises:
+            NotImplementedError: If this backend does not support
+                snapshots (the default).
+            KeyError: If *tag* does not exist.
+            RuntimeError: If the workspace is not alive.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support snapshots "
+            f"(sandbox_kind={self.sandbox_kind!r}). Override "
+            f"`snapshot` / `restore` to enable."
+        )
+
 
 class SandboxExtManagerBase(WorkspaceManagerBase):
     """Common base class for every extension workspace manager.

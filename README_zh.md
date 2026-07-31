@@ -29,7 +29,8 @@ agentScope 已内置 Docker、E2B、K8s、Apple Container、Bubblewrap、Daytona
 - **统一的扩展接口。** `SandboxedWorkspaceExtBase` + `SandboxExtManagerBase` 提供统一的 `isinstance` 判别符、`metrics()` 钩子，以及每个后端都实现的 `verify_runtime_available()` 探针。
 - **池化优化。** `SandboxPool` 维持 `min_warm` 个热沙箱，超过 `idle_ttl` 的空闲实例会被驱逐，热池上限为 `max_size`。每个 manager 可在自身缓存前串联一个 pool。可调 `acquire_strategy`（`fifo`/`lifo`）、可选 `health_check` 获取时探针、`max_concurrent_provisions` 信号量以防止惊群启动。详见 [`docs/PERFORMANCE_zh.md`](docs/PERFORMANCE_zh.md) 的分析与 [`docs/VFS_zh.md`](docs/VFS_zh.md) 中量化各旋钮的基准结果。
 - **VFS 转译层。** `VFSBackendBase` / `VFSWorkspaceBase` 提供一条 ~50 行即可新增后端的路径，把 `BackendBase` 三原语转译到任意目标（宿主 I/O、内存树、9p、FUSE……）。发布的 `agentfs` 参考实现是基准测试天然的"理论上限"基线，也是零运行时的 CI / 开发后端。
-- **真实测试，无 mock。** guest-agent 线协议使用打包进 microVM 的同一份 handler 源码做端到端验证（CI 中由于 AF_VSOCK 不可用，改用 Unix socket）；Firecracker REST API 客户端驱动的是真实的 Unix-socket HTTP 服务端。共 150+ 个测试，0 处 mock。
+- **Snapshot / restore。** 每个 `SandboxedWorkspaceExtBase` 都暴露统一的 `snapshot(tag)` / `restore(tag)` API，用于迭代式 agent 工作流（试 → 测 → 回滚）。`VFSWorkspaceBase` 内置真实深拷贝实现；无快照原语的后端抛 `NotImplementedError`，调用方可优雅降级。在 `agentfs` 基线上，snapshot/restore 对迭代回滚工作流比"关闭 + reprovision + 重种子"路径**快 9.1 倍**。开源调研（E2B / Firecracker / gVisor / containerd / k8s）、设计闭环与基准数据见 [`docs/SNAPSHOT_zh.md`](docs/SNAPSHOT_zh.md)；调研 / 决策 / 验证轨迹见 [`docs/SESSION_LOG_zh.md`](docs/SESSION_LOG_zh.md)。
+- **真实测试，无 mock。** guest-agent 线协议使用打包进 microVM 的同一份 handler 源码做端到端验证（CI 中由于 AF_VSOCK 不可用，改用 Unix socket）；Firecracker REST API 客户端驱动的是真实的 Unix-socket HTTP 服务端。snapshot/restore 正确性由真实 `diff -r` 子进程验证，而非对 mock 状态的等值断言。共 160+ 个测试，0 处 mock。
 
 ## 快速开始
 

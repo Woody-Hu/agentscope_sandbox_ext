@@ -1,64 +1,86 @@
 {
   "config": {
-    "warmup": 10,
-    "iters": 300,
-    "concurrency": 8
+    "warmup": 5,
+    "iters": 100,
+    "concurrency": 4
   },
   "results": [
     {
       "name": "direct",
-      "cold_acquire_ms": 6.387102999724448,
-      "hot_acquire_ms": 6.387102999724448,
-      "exec_ms": 3.0838489983580075,
+      "cold_acquire_ms": 7.221849000416114,
+      "hot_acquire_ms": 7.221849000416114,
+      "exec_ms": 3.859498000565509,
       "release_ms": 0.0,
-      "steady_ops_per_s": 21.91514206510068,
-      "p50_acquire_ms": 46.29161699995166,
-      "p95_acquire_ms": 51.37601280075614,
-      "p99_acquire_ms": 58.446740958715964
+      "steady_ops_per_s": 35.39569273724662,
+      "p50_acquire_ms": 27.78628000032768,
+      "p95_acquire_ms": 36.11250020026091,
+      "p99_acquire_ms": 36.5595418304747
     },
     {
       "name": "pool-fifo",
-      "cold_acquire_ms": 6.506016998173436,
-      "hot_acquire_ms": 0.0014350007404573262,
-      "exec_ms": 3.6044699991180096,
-      "release_ms": 0.0018280006770510226,
-      "steady_ops_per_s": 62.364152231747475,
-      "p50_acquire_ms": 16.72578000034264,
-      "p95_acquire_ms": 21.26516840216937,
-      "p99_acquire_ms": 39.536628078967595
+      "cold_acquire_ms": 7.028529000308481,
+      "hot_acquire_ms": 0.0012009995771222748,
+      "exec_ms": 4.007274000286998,
+      "release_ms": 0.0017030006347340532,
+      "steady_ops_per_s": 83.70158158008194,
+      "p50_acquire_ms": 10.98080099973231,
+      "p95_acquire_ms": 23.19364254963147,
+      "p99_acquire_ms": 26.306304779309357
     },
     {
       "name": "pool-lifo",
-      "cold_acquire_ms": 6.347145001200261,
-      "hot_acquire_ms": 0.0013790013326797634,
-      "exec_ms": 3.3887069985212293,
-      "release_ms": 0.0020240004232618958,
-      "steady_ops_per_s": 57.46332203408048,
-      "p50_acquire_ms": 18.390682500466937,
-      "p95_acquire_ms": 21.37272479976673,
-      "p99_acquire_ms": 40.98688334244796
+      "cold_acquire_ms": 7.01915999979974,
+      "hot_acquire_ms": 0.0011629999789875,
+      "exec_ms": 3.992420999566093,
+      "release_ms": 0.0018809996618074365,
+      "steady_ops_per_s": 84.20245826672222,
+      "p50_acquire_ms": 11.05376499981503,
+      "p95_acquire_ms": 21.595734350012208,
+      "p99_acquire_ms": 25.18390598041151
     },
     {
       "name": "prewarm",
-      "cold_acquire_ms": 6.391743998392485,
-      "hot_acquire_ms": 0.0012759992387145758,
-      "exec_ms": 3.3706139984133188,
-      "release_ms": 0.0015660007193218917,
-      "steady_ops_per_s": 59.573861555856325,
-      "p50_acquire_ms": 17.480304499258636,
-      "p95_acquire_ms": 22.19734874797723,
-      "p99_acquire_ms": 41.95616587840046
+      "cold_acquire_ms": 7.0532570007344475,
+      "hot_acquire_ms": 0.0016739995771786198,
+      "exec_ms": 4.391696999846317,
+      "release_ms": 0.002644999767653644,
+      "steady_ops_per_s": 85.80458606869215,
+      "p50_acquire_ms": 10.75286800005415,
+      "p95_acquire_ms": 19.79621340005906,
+      "p99_acquire_ms": 29.876629379295995
     },
     {
       "name": "prewarm+ratelimit",
-      "cold_acquire_ms": 7.51164599932963,
-      "hot_acquire_ms": 0.0012230011634528637,
-      "exec_ms": 3.5110790013277438,
-      "release_ms": 0.001648997567826882,
-      "steady_ops_per_s": 44.89091107752267,
-      "p50_acquire_ms": 21.113127999342396,
-      "p95_acquire_ms": 29.271168751256482,
-      "p99_acquire_ms": 74.29701021777855
+      "cold_acquire_ms": 7.386528000097314,
+      "hot_acquire_ms": 0.0011880001693498343,
+      "exec_ms": 4.0698470002098475,
+      "release_ms": 0.001612000232853461,
+      "steady_ops_per_s": 89.71623582715102,
+      "p50_acquire_ms": 10.71284649970039,
+      "p95_acquire_ms": 13.65196634988024,
+      "p99_acquire_ms": 29.709388460114564
+    },
+    {
+      "name": "reprovision-rollback",
+      "cold_acquire_ms": 8.90252900080668,
+      "hot_acquire_ms": 8.90252900080668,
+      "exec_ms": 4.117496000617393,
+      "release_ms": 0.0,
+      "steady_ops_per_s": 27.260743444980076,
+      "p50_acquire_ms": 36.38512699990315,
+      "p95_acquire_ms": 40.02534704973186,
+      "p99_acquire_ms": 43.75581120982134
+    },
+    {
+      "name": "snapshot-restore",
+      "cold_acquire_ms": 5.958581000413687,
+      "hot_acquire_ms": 7.037241000034555,
+      "exec_ms": 4.4073150002077455,
+      "release_ms": 0.007451999408658594,
+      "steady_ops_per_s": 105.78765733157366,
+      "p50_acquire_ms": 7.281188999968435,
+      "p95_acquire_ms": 10.525446849942446,
+      "p99_acquire_ms": 59.81329944980674
     }
   ]
 }
