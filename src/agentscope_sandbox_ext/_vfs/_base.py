@@ -28,6 +28,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import os
+import shutil
 import tempfile
 from typing import Any
 
@@ -161,6 +162,7 @@ class VFSWorkspaceBase(SandboxedWorkspaceExtBase):
         *,
         workspace_id: str | None = None,
         host_workdir: str | None = None,
+        snapshots_root: str | None = None,
         default_mcps: list[MCPClient] | None = None,
         skill_paths: list[str] | None = None,
     ) -> None:
@@ -176,6 +178,13 @@ class VFSWorkspaceBase(SandboxedWorkspaceExtBase):
         )
         self._host_workdir = host_workdir or tempfile.mkdtemp(
             prefix=f"as_vfs_{self.workspace_id}_",
+        )
+        # Snapshots live *outside* the workdir so :meth:`restore`
+        # (which wipes the workdir) does not delete them.  Defaulting
+        # to a sibling dir keeps everything co-located for cleanup
+        # while preserving snapshot durability across restores.
+        self._snapshots_root = snapshots_root or (
+            self._host_workdir.rstrip(os.sep) + ".snapshots"
         )
         self._vfs_backend: VFSBackendBase | None = None
 
@@ -248,6 +257,249 @@ class VFSWorkspaceBase(SandboxedWorkspaceExtBase):
             f"({self.sandbox_kind}). Working directory: {self._host_workdir}"
         )
 
+    # ── snapshot / restore (VFS translation) ────────────────────
+    #
+    # VFS workspaces translate snapshot/restore into host-side tree
+    # copies against ``_host_workdir``.  The default implementation
+    # shipped here is a *deep copy* (``shutil.copytree``) rather than
+    # a hardlink tree (``cp -al``): ``exec_shell`` runs arbitrary
+    # subprocesses that may mutate files in place (``sed -i``,
+    # ``echo >> file``, ``dd conv=notrunc``), and a hardlink tree
+    # would leak those mutations back into the snapshot.  containerd
+    # overlayfs gets away with hardlinks because the kernel enforces
+    # the lower dir's read-only-ness; a VFS workspace has no such
+    # enforcement, so we pay the deep-copy cost for correctness.
+    #
+    # Subclasses whose translation layer can guarantee copy-on-write
+    # semantics (e.g. a future ``overlayfs`` VFS backend that mounts a
+    # read-only lower + writable upper) override :meth:`_snapshot_to`
+    # / :meth:`_restore_from` to use the cheaper primitive.
+    #
+    # See ``docs/SNAPSHOT.md`` for the open-source survey (E2B,
+    # gVisor, Firecracker, containerd, k8s agent-sandbox) and the
+    # logical closure for why this is worth shipping.
+
+    async def snapshot(self, tag: str) -> str:
+        """Write a deep-copy snapshot of the VFS tree under *tag*.
+
+        Overrides :meth:`SandboxedWorkspaceExtBase.snapshot` with a
+        real implementation: the snapshot is a ``shutil.copytree`` of
+        ``_host_workdir`` into ``<_snapshots_root>/<tag>/``.  The
+        copy is written to a temp sibling first and only renamed into
+        place once complete, so a crash mid-copy never leaves a
+        half-written snapshot at the tag path.  Replacing an existing
+        tag removes the old dir before the rename; there is a brief
+        window in which a concurrent ``restore(tag)`` would observe
+        ``KeyError`` (sequential snapshot/restore of the same tag is
+        the norm — callers retry on ``KeyError``).
+
+        Requires the workspace to be alive (backend provisioned) so
+        the workdir tree exists and is quiescent — caller responsibility.
+
+        Args:
+            tag (`str`):
+                Snapshot identifier.  Namespaced under
+                :attr:`_snapshots_root`; reusing a tag replaces it
+                (with the brief window noted above).
+
+        Returns:
+            `str`:
+                Absolute path of the snapshot directory.
+        """
+        if self._vfs_backend is None:
+            raise RuntimeError(
+                "VFS workspace not provisioned — call initialize() "
+                "before snapshot()",
+            )
+        if not tag or os.sep in tag or tag in (".", ".."):
+            raise ValueError(
+                f"Invalid snapshot tag {tag!r}: must be a single path "
+                f"component, not empty / '.' / '..' / containing "
+                f"{os.sep!r}.",
+            )
+        os.makedirs(self._snapshots_root, exist_ok=True)
+        # Clean up stale temp dirs from a previous crash before
+        # writing the new snapshot.  Only touch our own ``.tmp`` /
+        # ``.obsolete`` suffixes so a concurrent snapshot of a
+        # *different* tag is unaffected.
+        self._cleanup_stale_snapshot_dirs(tag)
+        dest = os.path.join(self._snapshots_root, tag)
+        # Copy to a temp sibling first so a crash mid-copy never leaves
+        # a half-written tree at *dest*.  The final move into place is
+        # ``rmtree(dest) + os.replace(tmp, dest)``: ``os.replace`` of
+        # a non-empty dir fails with ``ENOTEMPTY`` on Linux, so the
+        # old snapshot must be removed first.  This leaves a brief
+        # window (between the rmtree and the rename) in which a
+        # concurrent ``restore(tag)`` would observe ``KeyError`` —
+        # acceptable for the snapshot use case (sequential
+        # snapshot/restore of the same tag is the norm; the caller
+        # retries on ``KeyError``).
+        tmp_dest = (
+            dest
+            + f".tmp.{os.getpid()}.{asyncio.get_event_loop().time():.6f}"
+        )
+        if os.path.exists(tmp_dest):
+            shutil.rmtree(tmp_dest)
+        try:
+            await self._snapshot_to(tmp_dest)
+            if os.path.exists(dest):
+                shutil.rmtree(dest)
+            os.replace(tmp_dest, dest)
+        except Exception:
+            if os.path.exists(tmp_dest):
+                shutil.rmtree(tmp_dest, ignore_errors=True)
+            raise
+        logger.debug(
+            "VFSWorkspace(%s): snapshot %r -> %s",
+            self.sandbox_kind,
+            tag,
+            dest,
+        )
+        return dest
+
+    def _cleanup_stale_snapshot_dirs(self, tag: str) -> None:
+        """Remove stale ``.tmp`` / ``.obsolete`` dirs for *tag* only.
+
+        Called at the start of :meth:`snapshot` so a prior crash that
+        left a half-written temp dir does not wedge the next snapshot.
+        Only touches dirs whose name starts with ``<tag>.tmp.`` or
+        ``<tag>.obsolete.`` — a concurrent snapshot of a *different*
+        tag is unaffected.
+        """
+        if not os.path.isdir(self._snapshots_root):
+            return
+        prefixes = (f"{tag}.tmp.", f"{tag}.obsolete.")
+        try:
+            for entry in os.scandir(self._snapshots_root):
+                if entry.is_dir() and entry.name.startswith(prefixes):
+                    shutil.rmtree(entry.path, ignore_errors=True)
+        except OSError:
+            # Best-effort — a scandir failure must not block snapshot.
+            pass
+
+    async def restore(self, tag: str) -> None:
+        """Reset the VFS tree to the snapshot identified by *tag*.
+
+        Overrides :meth:`SandboxedWorkspaceExtBase.restore` with a
+        real implementation: wipes ``_host_workdir`` and deep-copies
+        ``<_snapshots_root>/<tag>/`` into it.  The workspace stays
+        alive — no re-provision, no re-seed — so this is the cheap
+        rollback path.
+
+        The snapshot itself is preserved (so the same tag can be
+        restored repeatedly).  Requires the workspace to be alive so
+        the backend's ``_workdir`` pointer stays valid after the
+        wipe-and-replace (the path is the same, only the contents
+        change).
+
+        Args:
+            tag (`str`):
+                Identifier previously passed to :meth:`snapshot`.
+
+        Raises:
+            KeyError: If *tag* does not exist.
+            RuntimeError: If the workspace is not alive.
+        """
+        if self._vfs_backend is None:
+            raise RuntimeError(
+                "VFS workspace not provisioned — call initialize() "
+                "before restore()",
+            )
+        src = os.path.join(self._snapshots_root, tag)
+        if not os.path.isdir(src):
+            raise KeyError(
+                f"No snapshot named {tag!r} under {self._snapshots_root!r}",
+            )
+        # Wipe-and-replace via a temp dir + os.replace so a crash
+        # mid-restore does not leave the workdir empty.  The temp dir
+        # is created next to the workdir so ``os.replace`` stays
+        # inside the same filesystem (rename(2) is not cross-fs).
+        parent = os.path.dirname(self._host_workdir.rstrip(os.sep)) or "."
+        tmp_workdir = (
+            self._host_workdir.rstrip(os.sep)
+            + f".restore.{os.getpid()}.{asyncio.get_event_loop().time():.6f}"
+        )
+        if os.path.exists(tmp_workdir):
+            shutil.rmtree(tmp_workdir)
+        try:
+            await self._restore_from(src, tmp_workdir)
+            # Swap: move the current workdir aside, move the restored
+            # tree into place, then delete the aside copy.  Each
+            # rename is atomic on the same filesystem.
+            aside = self._host_workdir.rstrip(os.sep) + ".aside"
+            if os.path.exists(aside):
+                shutil.rmtree(aside)
+            os.replace(self._host_workdir, aside)
+            try:
+                os.replace(tmp_workdir, self._host_workdir)
+            except Exception:
+                # Roll back: put the original workdir back.
+                os.replace(aside, self._host_workdir)
+                raise
+            shutil.rmtree(aside, ignore_errors=True)
+        except Exception:
+            if os.path.exists(tmp_workdir):
+                shutil.rmtree(tmp_workdir, ignore_errors=True)
+            raise
+        logger.debug(
+            "VFSWorkspace(%s): restore %r <- %s",
+            self.sandbox_kind,
+            tag,
+            src,
+        )
+
+    # ── snapshot / restore subclass hooks ───────────────────────
+    #
+    # The default implementations use ``shutil.copytree`` (deep copy).
+    # Subclasses with a cheaper copy primitive (overlayfs upper-dir
+    # swap, btrfs reflink, 9p server-side snapshot, ...) override
+    # these to use it without touching the public ``snapshot`` /
+    # ``restore`` template methods.
+
+    async def _snapshot_to(self, dest: str) -> None:
+        """Copy the live workdir tree into *dest* (which must not exist).
+
+        Default implementation: ``shutil.copytree`` deep copy
+        preserving symlinks and metadata.  Subclasses override to use
+        a cheaper primitive when the translation layer guarantees
+        copy-on-write semantics.
+
+        Args:
+            dest (`str`):
+                Absolute path of the snapshot destination.  Must not
+                exist on entry; created by this call.  Caller wraps
+                the call in an atomic rename so a crash leaves no
+                partial snapshot at *dest*.
+        """
+        shutil.copytree(
+            self._host_workdir,
+            dest,
+            symlinks=True,
+            ignore_dangling_symlinks=True,
+        )
+
+    async def _restore_from(self, src: str, dest: str) -> None:
+        """Copy the snapshot tree at *src* into *dest* (which must not exist).
+
+        Default implementation: ``shutil.copytree`` deep copy.  The
+        caller handles wiping the live workdir and atomically swapping
+        *dest* into place, so this hook only needs to materialise the
+        tree.
+
+        Args:
+            src (`str`):
+                Absolute path of the snapshot source dir.
+            dest (`str`):
+                Absolute path of the restore destination.  Must not
+                exist on entry; created by this call.
+        """
+        shutil.copytree(
+            src,
+            dest,
+            symlinks=True,
+            ignore_dangling_symlinks=True,
+        )
+
     # ── subclass contract ────────────────────────────────────────
 
     @abc.abstractmethod
@@ -258,12 +510,26 @@ class VFSWorkspaceBase(SandboxedWorkspaceExtBase):
 
     async def metrics(self) -> dict[str, Any]:
         base = await super().metrics()
+        # Snapshot count is read defensively — a missing or removed
+        # snapshots root should not break ``metrics``.
+        snapshot_count = 0
+        if os.path.isdir(self._snapshots_root):
+            try:
+                snapshot_count = sum(
+                    1
+                    for entry in os.scandir(self._snapshots_root)
+                    if entry.is_dir() and not entry.name.startswith(".")
+                )
+            except OSError:
+                snapshot_count = 0
         base.update(
             {
                 "vfs_backend_type": type(self._vfs_backend).__name__
                 if self._vfs_backend is not None
                 else None,
                 "host_workdir": self._host_workdir,
+                "snapshots_root": self._snapshots_root,
+                "snapshot_count": snapshot_count,
             },
         )
         return base

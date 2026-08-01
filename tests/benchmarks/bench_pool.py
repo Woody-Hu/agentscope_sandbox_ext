@@ -15,6 +15,11 @@ Strategies compared
 * ``prewarm``           — pool with ``min_warm=N`` (warm pool under idle load).
 * ``prewarm+ratelimit`` — pool with ``min_warm=N`` AND
   ``max_concurrent_provisions=1`` (thundering-herd guard).
+* ``snapshot-restore``  — VFS ``snapshot()`` once, then iterate
+  ``mutate → restore()`` to roll back.  Models the iterative agent
+  workflow (try a change → test → roll back) and is the bench that
+  justifies the snapshot/restore feature shipped on
+  :class:`VFSWorkspaceBase`.  See ``docs/SNAPSHOT.md``.
 
 Metrics
 -------
@@ -26,6 +31,10 @@ Metrics
 * ``steady_ops_per_s`` — sustained acquire→exec→release rate at the
   given concurrency.
 * ``p50/p95/p99_acquire_ms`` — acquire tail latency during steady state.
+
+For ``snapshot-restore`` the same percentile columns are populated from
+the per-iteration restore latency, so the row is directly comparable to
+the pool rows even though the workflow is different.
 
 Running
 -------
@@ -44,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import itertools
 import json
 import os
 import sys
@@ -197,6 +207,221 @@ async def bench_direct(
     )
 
 
+# ── snapshot / restore bench ────────────────────────────────────
+
+
+def _seed_rollback_workspace(ws: SandboxedWorkspaceExtBase) -> None:
+    """Populate *ws* with a realistic iterative-agent starting state.
+
+    The seeded tree mirrors what a real agent session has on disk after
+    a few setup steps: a couple of skills, a sessions/ dir with a
+    session log, and a handful of data files.  This makes the
+    snapshot/reprovision costs non-trivial — a bare workdir would
+    artificially flatten the comparison.
+    """
+    # We use the synchronous ``open`` rather than the backend's
+    # ``write_file`` because the workspace's host_workdir is exposed
+    # via ``ws._host_workdir`` and we want deterministic bytes on disk
+    # for both the snapshot copy and the reseed path.
+    root = ws._host_workdir
+    for rel, body in [
+        ("skills/search/SKILL.md", b"# search skill\n"),
+        ("skills/search/helper.py", b"def run(q):\n    return [q]\n"),
+        ("skills/edit/SKILL.md", b"# edit skill\n"),
+        ("skills/edit/patch.py", b"def patch(*a, **kw):\n    pass\n"),
+        ("sessions/s1/log.json", b'{"events": []}\n'),
+        ("data/notes.md", b"# scratch notes\n- alpha\n- beta\n"),
+        ("data/blob.bin", bytes(range(256)) * 8),
+        (".mcp.json", b"[]\n"),
+    ]:
+        full = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "wb") as f:
+            f.write(body)
+
+
+def _mutate(ws: SandboxedWorkspaceExtBase) -> None:
+    """Apply a small, deterministic mutation to *ws*'s workdir.
+
+    Models the "agent tried a change" step of the iterative loop.
+    """
+    root = ws._host_workdir
+    with open(os.path.join(root, "data", "notes.md"), "ab") as f:
+        f.write(b"- mutated\n")
+    with open(os.path.join(root, "scratch.tmp"), "wb") as f:
+        f.write(b"throwaway")
+
+
+async def bench_reprovision_rollback(
+    warmup: int,
+    iters: int,
+    concurrency: int,
+    *,
+    seed_tree: bool = True,
+) -> StrategyResult:
+    """Baseline rollback path: close + reprovision + reseed each iter.
+
+    Models the iterative agent workflow *without* snapshot/restore: to
+    roll back to a known-good state the workspace is closed, a fresh
+    one is provisioned, the layout is re-ensured, and the skill tree
+    is re-seeded.  On a real container/microVM backend this is the
+    cold-boot cost; on ``agentfs`` it isolates the provision + reseed
+    cost, which is the apples-to-apples comparison for the
+    snapshot/restore feature.
+    """
+    factory = make_factory()
+
+    # Build one workspace to measure the "cold" cost of a single
+    # provision + layout + seed cycle.
+    async def _full_provision() -> SandboxedWorkspaceExtBase:
+        ws = await factory()
+        if seed_tree:
+            # Re-seed the skill/data tree every iteration — this is
+            # the cost snapshot/restore avoids.
+            _seed_rollback_workspace(ws)
+        return ws
+
+    # Warmup (excluded from timings).
+    for _ in range(warmup):
+        ws = await _full_provision()
+        await ws.get_backend().exec_shell(["true"])
+        await ws.close()
+
+    cold_ws = await _full_provision()
+    cold = await _time_ms(_full_provision())
+    exec_ms = await _time_ms(cold_ws.get_backend().exec_shell(["true"]))
+    await cold_ws.close()
+
+    async def _one_req() -> float:
+        t0 = time.perf_counter()
+        # Mutate, then throw the workspace away and provision + reseed
+        # a fresh one — that is the rollback.
+        w = await _full_provision()
+        try:
+            _mutate(w)
+            await w.get_backend().exec_shell(["true"])
+        finally:
+            await w.close()
+        return (time.perf_counter() - t0) * 1000.0
+
+    lats = await _steady_state(_one_req, iters, concurrency)
+    p50, p95, p99 = _percentiles(lats)
+    return StrategyResult(
+        name="reprovision-rollback",
+        cold_acquire_ms=cold,
+        hot_acquire_ms=cold,  # no hot path
+        exec_ms=exec_ms,
+        release_ms=0.0,  # close, not release
+        steady_ops_per_s=(len(lats) / (sum(lats) / 1000.0)) if lats else 0.0,
+        p50_acquire_ms=p50,
+        p95_acquire_ms=p95,
+        p99_acquire_ms=p99,
+        acquire_latencies_ms=lats,
+    )
+
+
+async def bench_snapshot_restore(
+    warmup: int,
+    iters: int,
+    concurrency: int,
+    *,
+    seed_tree: bool = True,
+) -> StrategyResult:
+    """Snapshot/restore rollback path: snapshot once, restore per iter.
+
+    Models the iterative agent workflow *with* snapshot/restore: a
+    single ``snapshot("rollback")`` captures the seeded state, then
+    every iteration is ``mutate → restore("rollback")``.  The workspace
+    stays alive — no re-provision, no re-seed — so the per-iteration
+    cost is just the deep-copy restore.
+
+    This is the bench that justifies the snapshot/restore feature on
+    :class:`VFSWorkspaceBase`: the per-iteration speedup vs the
+    reprovision baseline is the feature's quantified value.
+    """
+    factory = make_factory()
+
+    # Each concurrent worker needs its own workspace+snapshot (the
+    # snapshot lives under a per-workspace snapshots_root and a restore
+    # wipes the workdir).  We pre-build a pool of ``concurrency``
+    # workspaces, each with its own seeded snapshot, and have the
+    # steady-state runners borrow / return them.
+    ws_pool: list[SandboxedWorkspaceExtBase] = []
+    snap_tag = "rollback"
+
+    async def _make_snapped() -> SandboxedWorkspaceExtBase:
+        ws = await factory()
+        if seed_tree:
+            _seed_rollback_workspace(ws)
+        await ws.snapshot(snap_tag)
+        return ws
+
+    # Warmup: build + snapshot + tear down ``warmup`` workspaces.
+    for _ in range(warmup):
+        ws = await _make_snapped()
+        await ws.get_backend().exec_shell(["true"])
+        await ws.close()
+
+    # Cold acquire = cost of one ``snapshot()`` call (the one-time
+    # setup cost the feature adds).  Measure it on a fresh workspace.
+    cold_ws = await factory()
+    if seed_tree:
+        _seed_rollback_workspace(cold_ws)
+    cold = await _time_ms(cold_ws.snapshot(snap_tag))
+    exec_ms = await _time_ms(cold_ws.get_backend().exec_shell(["true"]))
+    # cold_ws becomes the first worker's workspace.
+
+    ws_pool.append(cold_ws)
+    for _ in range(max(0, concurrency - 1)):
+        ws_pool.append(await _make_snapped())
+
+    # Hot acquire = one ``restore()`` latency (the per-iteration cost
+    # the feature promises to keep cheap).
+    hot_ws = ws_pool[-1]
+    hot = await _time_ms(hot_ws.restore(snap_tag))
+
+    # Steady-state: each runner borrows a workspace, mutates, restores,
+    # returns.  We use a simple asyncio.Lock per workspace to enforce
+    # "one in-flight op per workspace" — restore is not concurrency-safe
+    # against itself on the same workdir.
+    ws_locks = [asyncio.Lock() for _ in ws_pool]
+    ws_iter = itertools.count()
+
+    async def _one_req() -> float:
+        idx = next(ws_iter) % len(ws_pool)
+        ws = ws_pool[idx]
+        async with ws_locks[idx]:
+            t0 = time.perf_counter()
+            _mutate(ws)
+            await ws.restore(snap_tag)
+            return (time.perf_counter() - t0) * 1000.0
+
+    lats = await _steady_state(_one_req, iters, concurrency)
+    p50, p95, p99 = _percentiles(lats)
+
+    # Release_ms: time to close one of the warm workspaces (teardown
+    # is the only "release" path for a VFS workspace).
+    release_t0 = time.perf_counter()
+    await ws_pool[0].close()
+    release_ms = (time.perf_counter() - release_t0) * 1000.0
+    # Tear down the rest.
+    for ws in ws_pool[1:]:
+        await ws.close()
+
+    return StrategyResult(
+        name="snapshot-restore",
+        cold_acquire_ms=cold,
+        hot_acquire_ms=hot,
+        exec_ms=exec_ms,
+        release_ms=release_ms,
+        steady_ops_per_s=(len(lats) / (sum(lats) / 1000.0)) if lats else 0.0,
+        p50_acquire_ms=p50,
+        p95_acquire_ms=p95,
+        p99_acquire_ms=p99,
+        acquire_latencies_ms=lats,
+    )
+
+
 async def _measure_pool(
     *,
     name: str,
@@ -339,6 +564,19 @@ async def run_all(
             acquire_strategy="lifo",
             min_warm=max(concurrency, 4),
             max_concurrent_provisions=1,
+        ),
+    )
+    # Snapshot/restore rollback pair — appended after the pool rows so
+    # the pool-vs-direct comparison above stays in its existing order
+    # (downstream docs index rows by position).
+    results.append(
+        await bench_reprovision_rollback(
+            warmup=warmup, iters=iters, concurrency=concurrency,
+        ),
+    )
+    results.append(
+        await bench_snapshot_restore(
+            warmup=warmup, iters=iters, concurrency=concurrency,
         ),
     )
     return results
