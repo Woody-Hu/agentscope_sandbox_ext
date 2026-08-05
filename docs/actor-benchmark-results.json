@@ -1,0 +1,125 @@
+{
+  "config": {
+    "iters": 60,
+    "concurrency": 16,
+    "tmpdir": "/tmp/actor_bench_4c276_v9"
+  },
+  "results": [
+    {
+      "name": "density-10a-2w",
+      "description": "10 actors on 2 workers, resume\u2192suspend per iter",
+      "iterations": 60,
+      "concurrency": 10,
+      "total_ms": 81.06567999493564,
+      "ops_per_s": 740.1405872836488,
+      "p50_ms": 1.326885498201591,
+      "p95_ms": 1.4630906996899282,
+      "p99_ms": 1.8202441704124783,
+      "extra": {
+        "actors": 10,
+        "pool_size": 2,
+        "density_ratio": 5.0
+      }
+    },
+    {
+      "name": "density-50a-4w",
+      "description": "50 actors on 4 workers, resume\u2192suspend per iter",
+      "iterations": 60,
+      "concurrency": 16,
+      "total_ms": 78.56786598858889,
+      "ops_per_s": 763.6709899784516,
+      "p50_ms": 1.2876985001639696,
+      "p95_ms": 1.4839068482615403,
+      "p99_ms": 1.6486573189104081,
+      "extra": {
+        "actors": 50,
+        "pool_size": 4,
+        "density_ratio": 12.5
+      }
+    },
+    {
+      "name": "density-100a-4w",
+      "description": "100 actors on 4 workers, resume\u2192suspend per iter",
+      "iterations": 60,
+      "concurrency": 16,
+      "total_ms": 77.6489680101804,
+      "ops_per_s": 772.708273368598,
+      "p50_ms": 1.2748200006171828,
+      "p95_ms": 1.446288201259449,
+      "p99_ms": 1.6453356085548876,
+      "extra": {
+        "actors": 100,
+        "pool_size": 4,
+        "density_ratio": 25.0
+      }
+    },
+    {
+      "name": "pause-latency",
+      "description": "pause (node-local capture, no upload)",
+      "iterations": 50,
+      "concurrency": 1,
+      "total_ms": 7.181077016866766,
+      "ops_per_s": 6962.743872898317,
+      "p50_ms": 0.09307500113209244,
+      "p95_ms": 0.19293645073048538,
+      "p99_ms": 1.0675554284171054,
+      "extra": {}
+    },
+    {
+      "name": "suspend-latency",
+      "description": "suspend (capture + durable upload)",
+      "iterations": 50,
+      "concurrency": 1,
+      "total_ms": 38.709453012415906,
+      "ops_per_s": 1291.6741547332817,
+      "p50_ms": 0.7462454996129964,
+      "p95_ms": 0.9699520485810348,
+      "p99_ms": 1.1534773210223648,
+      "extra": {}
+    },
+    {
+      "name": "golden-restore",
+      "description": "resume from golden snapshot (clone-restore)",
+      "iterations": 50,
+      "concurrency": 1,
+      "total_ms": 28.65614898109925,
+      "ops_per_s": 1744.826216285326,
+      "p50_ms": 0.5723205013055122,
+      "p95_ms": 0.6336186497719609,
+      "p99_ms": 0.6920745484239886,
+      "extra": {}
+    },
+    {
+      "name": "singleflight-on-10c",
+      "description": "10 concurrent checkpoint.suspend calls; singleflight dedups to 1 execution",
+      "iterations": 30,
+      "concurrency": 10,
+      "total_ms": 179.24705899713445,
+      "ops_per_s": 167.36676276780418,
+      "p50_ms": 5.955329001153586,
+      "p95_ms": 6.109775799995987,
+      "p99_ms": 6.254853409664065,
+      "extra": {
+        "callers": 10,
+        "executions_per_iter": 1.0,
+        "dedup_ratio": 10
+      }
+    },
+    {
+      "name": "singleflight-off-10c",
+      "description": "10 concurrent direct suspend calls; no dedup (N executions)",
+      "iterations": 30,
+      "concurrency": 10,
+      "total_ms": 321.99588500589016,
+      "ops_per_s": 93.16889251380098,
+      "p50_ms": 10.018513499744586,
+      "p95_ms": 11.965577301452868,
+      "p99_ms": 17.557347471811234,
+      "extra": {
+        "callers": 10,
+        "executions_per_iter": 10.0,
+        "dedup_ratio": 1
+      }
+    }
+  ]
+}
