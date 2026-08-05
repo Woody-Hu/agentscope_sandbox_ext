@@ -1,0 +1,45 @@
+{
+  "config": {
+    "warmup": 5,
+    "iters": 150,
+    "concurrency": 4
+  },
+  "results": [
+    {
+      "name": "direct",
+      "resume_ms": 1.5174880008999025,
+      "suspend_ms": 0.0,
+      "steady_ops_per_s": 286.99753313711733,
+      "p50_resume_ms": 3.449973000897444,
+      "p95_resume_ms": 3.7393664994851847,
+      "p99_resume_ms": 4.071721950440405
+    },
+    {
+      "name": "cold-resume",
+      "resume_ms": 0.9949369996320456,
+      "suspend_ms": 0.8917979994294001,
+      "steady_ops_per_s": 1032.963724854669,
+      "p50_resume_ms": 0.9417630008101696,
+      "p95_resume_ms": 1.0170114504035155,
+      "p99_resume_ms": 1.2094417704247462
+    },
+    {
+      "name": "warm-idle-resume",
+      "resume_ms": 0.9548809994157637,
+      "suspend_ms": 0.949776000197744,
+      "steady_ops_per_s": 988.7122804943572,
+      "p50_resume_ms": 1.0033755006588763,
+      "p95_resume_ms": 1.0874668009819288,
+      "p99_resume_ms": 1.2733869311159647
+    },
+    {
+      "name": "snapshot-restore",
+      "resume_ms": 1.1206060007680207,
+      "suspend_ms": 1.017837999825133,
+      "steady_ops_per_s": 854.3651743869362,
+      "p50_resume_ms": 1.159331998678681,
+      "p95_resume_ms": 1.2381288996039073,
+      "p99_resume_ms": 1.4645075590669858
+    }
+  ]
+}
