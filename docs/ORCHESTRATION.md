@@ -348,7 +348,6 @@ class ActorTemplate:
     default_mcps: list            # MCP clients
     snapshot_scope_on_suspend: CheckpointScope   # FULL | DATA
     snapshot_scope_on_pause: CheckpointScope     # DATA (node-local)
-    golden_snapshot_ref: str | None              # set after first materialisation
     version: int = 1              # immutable: bump = new template
 ```
 
@@ -356,6 +355,16 @@ class ActorTemplate:
 changing the provision config produces a new `template_id`. This is
 required because **changing the image invalidates snapshots** — a
 snapshot taken from template v1 is not restorable into a v2 worker.
+
+**Golden snapshot is tracked off the template.** The one-time "golden"
+snapshot of a fresh materialisation is tracked out-of-band by the
+:class:`Orchestrator` (its `golden_snapshots` registry) rather than as
+a field on the frozen template: the first actor of a template
+cold-boots and (if the backend supports snapshots) captures a golden
+snapshot; subsequent actors of the same template `restore("golden")`
+instead of cold-booting — boot becomes a restore, not a cold start.
+Keeping the golden ref off the immutable spec means the spec never has
+to mutate once the first actor has materialised.
 
 ### 4.4 Constraints & scheduling
 

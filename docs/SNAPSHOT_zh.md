@@ -77,7 +77,7 @@ async def restore(self, tag: str) -> None: ...
 ```
 
 默认实现抛 `NotImplementedError`，所以 API 跨每个后端统一——尚无快照
-原语的后端（未来的 `memoryfs`、现有 Firecracker/gVisor/Kata 后端直到它们
+原语的后端（未来的 `memoryfs`、现有 Firecracker/gVisor/Kata/Sysbox 后端直到它们
 长出原生快照支持）保持原样工作。`VFSWorkspaceBase` 用真实实现覆盖二者；
 `AgentFSWorkspace` 继承之。
 

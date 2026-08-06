@@ -23,13 +23,9 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from typing import Any
-
-from agentscope._logging import logger
 
 from .model import (
     Actor,
-    ActorRef,
     ActorStatus,
     Constraints,
     SandboxClass,

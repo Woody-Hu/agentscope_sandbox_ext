@@ -377,9 +377,7 @@ class SandboxPool:
                         raise asyncio.TimeoutError()
                     try:
                         await asyncio.wait_for(
-                            self._cond.wait_for(
-                                self._free.__len__.__call__,
-                            ),
+                            self._cond.wait_for(lambda: len(self._free) > 0),
                             timeout=remaining,
                         )
                     except asyncio.TimeoutError:

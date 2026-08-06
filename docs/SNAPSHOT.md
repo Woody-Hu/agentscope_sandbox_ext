@@ -93,10 +93,11 @@ async def restore(self, tag: str) -> None: ...
 
 The default implementations raise `NotImplementedError`, so the API is
 uniform across every backend — backends that have no snapshot
-primitive (a future `memoryfs`, the existing Firecracker/gVisor/Kata
-backends until they grow native snapshot support) keep working
-unchanged. `VFSWorkspaceBase` overrides both with a real
-implementation; `AgentFSWorkspace` inherits it.
+primitive (a future `memoryfs`, the existing
+Firecracker/gVisor/Kata/Sysbox backends until they grow native
+snapshot support) keep working unchanged. `VFSWorkspaceBase`
+overrides both with a real implementation; `AgentFSWorkspace`
+inherits it.
 
 ### 3.2 VFS translation
 

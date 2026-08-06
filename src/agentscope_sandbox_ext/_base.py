@@ -2,9 +2,10 @@
 """Unified extension base classes for sandbox workspaces.
 
 This module defines a single ``SandboxedWorkspaceExtBase`` that every
-extension backend (Firecracker microVM, gVisor, Kata Containers, ...)
-inherits from, plus a ``SandboxExtManagerBase`` that every manager
-inherits from.  Both reuse agentscope's own abstractions verbatim:
+extension backend (Firecracker microVM, gVisor, Kata Containers,
+Sysbox, and the zero-runtime VFS / ``agentfs``) inherits from, plus a
+``SandboxExtManagerBase`` that every manager inherits from.  Both
+reuse agentscope's own abstractions verbatim:
 
 * :class:`agentscope.workspace._sandboxed_base.SandboxedWorkspaceBase`
   — the in-sandbox MCP-gateway template-method lifecycle.

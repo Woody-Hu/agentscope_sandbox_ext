@@ -103,10 +103,13 @@ For a multi-tenant host with bursty traffic, raise `min_warm` to 2-3. For a sing
 CI cannot run a real Firecracker microVM (no `/dev/kvm`), so the test suite exercises the wire protocol against a real Unix-socket server that loads the same `GUEST_AGENT_SOURCE` string the workspace ships into the rootfs:
 
 ```python
-from tests._helpers.guest_agent_server import run_guest_agent_server
+from agentscope_sandbox_ext._firecracker._backend import GuestAgentClient
+from _helpers.guest_agent_server import GuestAgentUnixServer
 
-async with run_guest_agent_server() as path:
-    client = GuestAgentClient(connect=make_unix_connect(path))
+# _make_unix_connect returns an async callable that opens a real
+# Unix-socket connection (see tests/test_firecracker_guest_agent.py).
+with GuestAgentUnixServer() as srv:
+    client = GuestAgentClient(connect=_make_unix_connect(srv.path))
     result = await client.exec_shell(["echo", "hello"])
     assert result.exit_code == 0
     assert result.stdout.strip() == b"hello"

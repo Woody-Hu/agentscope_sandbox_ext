@@ -21,6 +21,7 @@ separate kernel).
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from typing import Any
 
@@ -144,7 +145,6 @@ class SysboxWorkspace(SandboxedWorkspaceExtBase, DockerWorkspace):
                 f"'docker info' failed (exit {probe.returncode}): "
                 f"{stderr.decode('utf-8', 'replace').strip()}",
             )
-        import json
 
         try:
             runtimes = json.loads(stdout.decode("utf-8"))

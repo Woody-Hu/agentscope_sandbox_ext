@@ -215,17 +215,15 @@ class ActorTemplate:
     because **changing the image invalidates snapshots** — a snapshot
     taken from template v1 is not restorable into a v2 worker.
 
-    The ``golden_snapshot_ref`` is the one-time "known-good" snapshot of
-    a fresh materialisation.  The first actor of a template cold-boots
+    The one-time "golden" snapshot of a fresh materialisation is tracked
+    out-of-band by the :class:`~agentscope_sandbox_ext._orchestration.
+    orchestrator.Orchestrator` (its ``golden_snapshots`` registry) rather
+    than on the frozen template: the first actor of a template cold-boots
     and (if the backend supports snapshots) captures a golden snapshot;
-    subsequent actors of the same template ``restore("golden")`` instead
-    of cold-booting — boot becomes a restore, not a cold start.
-
-    ``golden_snapshot_ref`` is mutable in practice (set once after the
-    first materialisation) but the template's *spec* is immutable; we
-    model that by keeping the spec fields on the frozen dataclass and
-    tracking the golden ref out-of-band in the orchestrator's template
-    registry.
+    subsequent actors of the same template restore it instead of
+    cold-booting — boot becomes a restore, not a cold start.  Keeping the
+    golden ref off the immutable spec means the spec never has to mutate
+    once the first actor has materialised.
     """
 
     template_id: str
@@ -236,11 +234,6 @@ class ActorTemplate:
     default_mcps: list[Any] = field(default_factory=list)
     snapshot_scope_on_suspend: CheckpointScope = CheckpointScope.DATA
     snapshot_scope_on_pause: CheckpointScope = CheckpointScope.DATA
-    #: One-time golden snapshot of a fresh materialisation.  ``None``
-    #: until the first actor of this template has booted and been
-    #: snapshotted; thereafter restored by every new actor of the
-    #: template instead of cold-booting.
-    golden_snapshot_ref: str | None = None
     version: int = 1
 
 

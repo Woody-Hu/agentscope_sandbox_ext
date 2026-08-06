@@ -3,7 +3,7 @@
 
 Extension sandbox backends for the agentScope framework.
 
-This package adds three new sandboxed-workspace backends without
+This package adds five new sandboxed-workspace backends without
 modifying any agentscope native code — everything is composed by
 inheritance from agentscope's public (and documented-subclassing)
 private abstractions:
@@ -22,6 +22,16 @@ private abstractions:
   Containers runtime, combining VM-grade isolation with container
   ergonomics.
 
+* :class:`SysboxWorkspace` — a Docker container forced onto the
+  Sysbox runtime, giving per-container user/mount namespaces and
+  virtualised ``/proc`` / ``/sys`` (Docker-in-Docker without
+  ``--privileged``) while staying lighter than a full VM.
+
+* :class:`AgentFSWorkspace` — a zero-runtime VFS backend that
+  translates the ``BackendBase`` primitives to host I/O + subprocess
+  confined to a per-workspace directory. The natural CI / dev /
+  benchmark baseline.
+
 Each workspace inherits from a single
 :class:`SandboxedWorkspaceExtBase` so a management plane has a
 uniform ``isinstance`` discriminator and ``metrics()`` hook while
@@ -29,10 +39,23 @@ keeping the full sandboxed-workspace lifecycle (gateway bootstrap,
 MCP persistence, skill seeding, offload) inherited from
 :class:`agentscope.workspace._sandboxed_base.SandboxedWorkspaceBase`.
 
-Each backend ships with a matching manager (``FirecrackerWorkspaceManager``,
-``GVisorWorkspaceManager``, ``KataWorkspaceManager``) that owns a
+Each backend ships with a matching manager
+(``FirecrackerWorkspaceManager``, ``GVisorWorkspaceManager``,
+``KataWorkspaceManager``, ``SysboxWorkspaceManager``) that owns a
 cache + TTL sweeper and an optional :class:`SandboxPool` pre-warm
 tier to smooth out cold-boot latency.
+
+Two additive sub-packages are available for callers that need more
+than the per-workspace model (imported by fully-qualified path — they
+are intentionally not re-exported at the top level so the default
+surface stays small):
+
+* :mod:`agentscope_sandbox_ext._orchestration` — actor/worker
+  orchestration (singleflight, CAS stores, worker pool, checkpoint
+  bridge, suspend/resume lifecycle). See ``docs/ORCHESTRATION.md``.
+* :mod:`agentscope_sandbox_ext._runtime` — multi-tier durable
+  snapshot storage (Local / Postgres / MinIO + tiered orchestration).
+  See ``docs/AGENT_RUNTIME.md``.
 
 Quickstart
 ----------
