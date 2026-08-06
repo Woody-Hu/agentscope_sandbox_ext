@@ -24,17 +24,17 @@ double-provisioning.  Every actor-state transition is CAS-guarded by
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import time
 from typing import Any
 
 from agentscope._logging import logger
 
-from .._base import SandboxedWorkspaceExtBase
 from .checkpoint import CheckpointBridge, CheckpointError
 from .lifecycle import Step, Workflow, WorkflowContext, WorkflowError
 from .model import (
     Actor,
-    ActorRef,
     ActorStatus,
     ActorTemplate,
     CheckpointScope,
@@ -181,7 +181,9 @@ class Orchestrator:
         deleting = _with_status(actor, ActorStatus.DELETING)
         try:
             await self._actors.put(deleting, expected_version=actor.version)
-        except VersionNotFound:
+        except ActorNotFound:
+            # Actor vanished between the read above and the CAS — treat
+            # as already deleted and continue to the final delete call.
             pass
         except VersionConflict:
             # Someone else mutated it; re-check and refuse if active.
@@ -474,8 +476,6 @@ class _ClaimWorkerStep(Step):
 
         # Acquire + claim with retry on CAS contention (the reference
         # runtime retries 5× with 10ms×2 backoff).
-        import asyncio as _asyncio
-
         last_err: Exception | None = None
         for attempt in range(_MAX_CLAIM_RETRIES):
             worker = await self._orch._workers.acquire_worker(constraints)
@@ -497,7 +497,7 @@ class _ClaimWorkerStep(Step):
                 # The worker was grabbed by another actor; retire it
                 # (return its sandbox to the pool) and try a fresh one.
                 await self._orch._workers.release_worker(worker, drain=True)
-                await _asyncio.sleep(
+                await asyncio.sleep(
                     _CLAIM_BACKOFF_BASE * (2**attempt)
                 )
         raise WorkflowError(
@@ -629,14 +629,8 @@ class _FinalizeRunningStep(Step):
 # ── helpers ─────────────────────────────────────────────────────
 
 
-class VersionNotFound(Exception):
-    """Internal: actor vanished between read and CAS."""
-
-
 def _with_status(actor: Actor, status: ActorStatus) -> Actor:
     """Return a copy of *actor* with *status* set (preserving version)."""
-    import dataclasses
-
     return dataclasses.replace(actor, status=status)
 
 

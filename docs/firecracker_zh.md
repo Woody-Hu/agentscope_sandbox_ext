@@ -103,10 +103,13 @@ Firecracker microVM 比容器重，因此默认池较保守：
 CI 无法运行真实 Firecracker microVM（无 `/dev/kvm`），因此测试套件针对一个真实 Unix-socket 服务端验证线协议，该服务端加载的 `GUEST_AGENT_SOURCE` 字符串与 workspace 写入 rootfs 的完全一致：
 
 ```python
-from tests._helpers.guest_agent_server import run_guest_agent_server
+from agentscope_sandbox_ext._firecracker._backend import GuestAgentClient
+from _helpers.guest_agent_server import GuestAgentUnixServer
 
-async with run_guest_agent_server() as path:
-    client = GuestAgentClient(connect=make_unix_connect(path))
+# _make_unix_connect 返回一个异步可调用对象，用于打开真实的
+# Unix-socket 连接（见 tests/test_firecracker_guest_agent.py）。
+with GuestAgentUnixServer() as srv:
+    client = GuestAgentClient(connect=_make_unix_connect(srv.path))
     result = await client.exec_shell(["echo", "hello"])
     assert result.exit_code == 0
     assert result.stdout.strip() == b"hello"

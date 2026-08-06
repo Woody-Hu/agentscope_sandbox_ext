@@ -45,7 +45,7 @@ from .model import (
     WorkerAssignment,
     WorkerState,
 )
-from .store import WorkerBusy, WorkerNotFound, WorkerStore
+from .store import WorkerBusy, WorkerNotFound, WorkerStore, _matches
 
 #: Default cap on warm-idle workers kept between activations.
 DEFAULT_MAX_WARM_IDLE = 4
@@ -107,21 +107,17 @@ class Scheduler:
 
 
 def _satisfies(worker: Worker, constraints: Constraints) -> bool:
-    """True if *worker* can serve *constraints* (all fields AND'd)."""
-    if worker.sandbox_class != constraints.sandbox_class:
-        return False
+    """True if *worker* can serve *constraints* (all fields AND'd).
+
+    Delegates the label / node / class matching to :func:`._matches` and
+    additionally requires the worker to be idle — the store's
+    :meth:`WorkerStore.list_idle` already filters by ``is_idle``, so this
+    is a defensive check for callers that invoke :meth:`Scheduler.pick`
+    directly with arbitrary workers.
+    """
     if not worker.is_idle:
         return False
-    if constraints.required_node is not None:
-        if worker.node != constraints.required_node:
-            return False
-    for k, v in constraints.template_selector.items():
-        if worker.labels.get(k) != v:
-            return False
-    for k, v in constraints.actor_selector.items():
-        if worker.labels.get(k) != v:
-            return False
-    return True
+    return _matches(worker, constraints)
 
 
 # ── worker pool ─────────────────────────────────────────────────

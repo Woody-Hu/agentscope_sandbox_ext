@@ -2,7 +2,7 @@
 
 English | [简体中文](ARCHITECTURE_zh.md)
 
-This document describes the design of `agentscope-sandbox-ext` — how the three sandbox backends (Firecracker, gVisor, Kata Containers) plug into agentScope without modifying any native code, and how the pooling layer composes in front of them.
+This document describes the design of `agentscope-sandbox-ext` — how the five sandbox backends (Firecracker, gVisor, Kata Containers, Sysbox, and the zero-runtime VFS / `agentfs`) plug into agentScope without modifying any native code, and how the pooling layer composes in front of them.
 
 ## Design constraints
 
@@ -16,28 +16,28 @@ The package was designed against four hard constraints from the task brief:
 ## Layered composition
 
 ```
-            ┌─────────────────────────────────────────────────────────────┐
-            │           agentscope.app  (host)                            │
-            │                                                             │
-            │   WorkspaceManagerBase          SandboxedWorkspaceBase       │
-            │   (abstract manager)            (template-method lifecycle)  │
-            │          ▲                              ▲                    │
-            │          │ subclass                    │ subclass            │
-            └──────────┼──────────────────────────────┼────────────────────┘
+            ┌──────────────────────────────────────────────────────────────────┐
+            │           agentscope.app  (host)                                 │
+            │                                                                  │
+            │   WorkspaceManagerBase          SandboxedWorkspaceBase           │
+            │   (abstract manager)            (template-method lifecycle)      │
+            │          ▲                              ▲                       │
+            │          │ subclass                    │ subclass               │
+            └──────────┼──────────────────────────────┼───────────────────────┘
                        │                              │
-            ┌──────────┴──────────────┐    ┌──────────┴────────────────┐
-            │  SandboxExtManagerBase   │    │  SandboxedWorkspaceExtBase│
-            │   + backend_kind        │    │   + sandbox_kind           │
-            │   + manager_metrics()   │    │   + metrics()              │
-            │   (this package)         │    │   + verify_runtime_available()│
-            └─────┬──────┬──────┬──────┘    └─────┬──────┬──────┬────────┘
-                  │      │      │                  │      │      │
-            ┌─────┴─┐ ┌──┴──┐ ┌─┴────┐      ┌─────┴─┐ ┌──┴──┐ ┌─┴────┐
-            │ FC Mgr│ │GVis │ │Kata  │      │ FC WS │ │GVis │ │Kata  │
-            │       │ │ Mgr │ │ Mgr  │      │       │ │ WS  │ │ WS   │
-            └───┬───┘ └──┬──┘ └──┬───┘      └───┬───┘ └──┬──┘ └──┬───┘
-                │        │       │              │        │       │
-                └────────┴───────┴──────────────┴────────┴───────┘
+            ┌──────────┴──────────────┐    ┌──────────┴──────────────────────┐
+            │  SandboxExtManagerBase   │    │  SandboxedWorkspaceExtBase      │
+            │   + backend_kind         │    │   + sandbox_kind                │
+            │   + manager_metrics()    │    │   + metrics()                   │
+            │   (this package)         │    │   + verify_runtime_available()  │
+            └─────┬──────┬─────┬───────┘    └──┬──────┬─────┬─────┬───────────┘
+                  │      │     │               │      │     │     │
+            ┌─────┴─┐ ┌──┴──┐ ┌─┴───┐ ┌──────┐ ┌┴────┐ ┌─┴──┐ ┌─┴──┐ ┌─┴────┐
+            │ FC Mgr│ │GVis │ │Kata │ │Sysbox│ │FC WS│ │GVis│ │Kata│ │Sysbox│
+            │       │ │ Mgr │ │ Mgr │ │ Mgr  │ │     │ │ WS │ │ WS │ │  WS  │
+            └───┬───┘ └──┬──┘ └──┬──┘ └──┬───┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬───┘
+                │        │       │      │       │       │      │      │
+                └────────┴───────┴──────┴───────┴───────┴──────┴──────┘
                                   │
                           (optional) SandboxPool
                                   │
@@ -46,6 +46,10 @@ The package was designed against four hard constraints from the task brief:
                           │  idle sweeper  │
                           │  capacity cap  │
                           └────────────────┘
+
+        Note: `AgentFSWorkspace` (the VFS backend) inherits directly from
+        `SandboxedWorkspaceExtBase` without a manager — it is a
+        workspace-only, zero-runtime baseline (no pool layer).
 ```
 
 ### Why two base classes instead of one?
@@ -61,6 +65,8 @@ Every backend implements a `classmethod async verify_runtime_available()` that r
 | Firecracker | `firecracker --version` on `$PATH`, `/dev/kvm` writable, kernel + rootfs present |
 | gVisor | `runsc --version` on `$PATH`, Docker daemon responds to `/v1.41/info` |
 | Kata | `kata-runtime --version` on `$PATH`, Docker daemon responds |
+| Sysbox | Docker daemon reports one of `sysbox-runc` / `sysbox` in `docker info --format '{{json .Runtimes}}'` |
+| VFS (`agentfs`) | Always succeeds — pure Python, no host runtime needed |
 
 ## Firecracker backend
 
@@ -90,15 +96,15 @@ Every backend implements a `classmethod async verify_runtime_available()` that r
 
 The guest agent is a pure-stdlib Python script shipped inside the rootfs. It listens on `AF_VSOCK` and speaks a length-prefixed JSON protocol. The same source string is exercised by the test suite against a Unix-socket transport, so the wire format is verified end-to-end without needing a running microVM in CI.
 
-## gVisor / Kata backends
+## gVisor / Kata / Sysbox backends
 
-These two reuse `agentscope.workspace.DockerWorkspace`'s entire flow (image build, bind-mount, gateway bootstrap) and only override `HostConfig.Runtime`:
+These three reuse `agentscope.workspace.DockerWorkspace`'s entire flow (image build, bind-mount, gateway bootstrap) and only override `HostConfig.Runtime`:
 
 ```python
 config = {
     "Image": self._image_tag,
     "HostConfig": {
-        "Runtime": self._runtime,   # "runsc" or "kata-fc"
+        "Runtime": self._runtime,   # "runsc" | "kata-fc" | "sysbox-runc"
         "Binds": [...],
     },
     ...
@@ -106,6 +112,22 @@ config = {
 ```
 
 This is the smallest possible delta — every other concern (gateway port, MCP persistence, skill seeding) is inherited unchanged.
+
+The runtime-specific delta:
+
+- **gVisor** (`runsc`) — application-level kernel; the Sentry intercepts syscalls in userspace, giving strong isolation without a VM.
+- **Kata** (`kata-fc` / `kata-qemu` / ...) — each container runs inside a lightweight VM backed by a hardware hypervisor, combining VM-grade isolation with container ergonomics.
+- **Sysbox** (`sysbox-runc` / `sysbox`) — per-container user/mount namespaces, virtualised `/proc` and `/sys`, and Docker-in-Docker without `--privileged`; lighter than a full VM.
+
+## VFS / `agentfs` backend
+
+`AgentFSWorkspace` is the zero-runtime baseline: it translates the `BackendBase` primitives (`exec_shell` / `read_file` / `write_file`) into host I/O + `asyncio.subprocess` confined to a per-workspace directory.
+
+- **No Docker / Firecracker / Kata runtime to verify** — `verify_runtime_available()` always succeeds.
+- **No image build, no container start, no guest agent** — provisioning is a single `os.makedirs` plus a Python object construction (microsecond-cheap).
+- **No manager, no `SandboxPool`** — `AgentFSWorkspace` is constructed directly. The "always warm, always cheap" property makes pooling pointless.
+
+This makes `agentfs` the natural CI / dev / benchmark baseline: it exercises the full sandboxed-workspace lifecycle (provision → initialize → exec → teardown) with real I/O and real subprocesses, but needs no host runtime. See `docs/VFS.md` for the design and `docs/PERFORMANCE.md` for its role as the "theoretical upper bound" in cold-boot benchmarks.
 
 ## Pooling layer
 
@@ -141,10 +163,12 @@ Tests never mock. They spin up real protocol peers:
 
 ## Why not just one backend?
 
-The three backends cover three distinct points in the isolation / overhead trade-off:
+The five backends cover distinct points in the isolation / overhead trade-off:
 
 - **Firecracker** — strongest isolation (separate kernel), sub-second cold boot, but needs KVM and a rootfs.
 - **gVisor** — container-fast, application-level kernel, no VM overhead, but Sentry is not a complete kernel.
 - **Kata** — VM-grade isolation with container ergonomics, but heavier than gVisor.
+- **Sysbox** — per-container user/mount namespaces and virtualised `/proc` / `/sys` (Docker-in-Docker without `--privileged`); sits between `runc` and Kata on the isolation axis.
+- **VFS (`agentfs`)** — zero isolation, zero runtime, microsecond provisioning. The CI / dev / benchmark baseline — represents the "theoretical upper bound" of how fast a workspace can be when there is nothing to isolate.
 
-A management plane can offer all three and let the per-agent isolation policy pick — the unified `SandboxedWorkspaceExtBase` discriminator makes routing trivial.
+A management plane can offer any subset and let the per-agent isolation policy pick — the unified `SandboxedWorkspaceExtBase` discriminator makes routing trivial.

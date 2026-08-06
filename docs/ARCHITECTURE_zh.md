@@ -2,7 +2,7 @@
 
 [English](ARCHITECTURE.md) | 简体中文
 
-本文档介绍 `agentscope-sandbox-ext` 的设计 —— 三种沙箱后端（Firecracker、gVisor、Kata Containers）如何在不修改任何原生代码的前提下接入 agentScope，以及池化层如何在它们之前组合使用。
+本文档介绍 `agentscope-sandbox-ext` 的设计 —— 五种沙箱后端（Firecracker、gVisor、Kata Containers、Sysbox 以及零运行时的 VFS / `agentfs`）如何在不修改任何原生代码的前提下接入 agentScope，以及池化层如何在它们之前组合使用。
 
 ## 设计约束
 
@@ -16,28 +16,28 @@
 ## 分层组合
 
 ```
-            ┌─────────────────────────────────────────────────────────────┐
-            │           agentscope.app  (host)                            │
-            │                                                             │
-            │   WorkspaceManagerBase          SandboxedWorkspaceBase       │
-            │   (抽象管理器)                  (模板方法生命周期)            │
-            │          ▲                              ▲                    │
-            │          │ 子类继承                     │ 子类继承            │
-            └──────────┼──────────────────────────────┼────────────────────┘
+            ┌──────────────────────────────────────────────────────────────────┐
+            │           agentscope.app  (host)                                 │
+            │                                                                  │
+            │   WorkspaceManagerBase          SandboxedWorkspaceBase           │
+            │   (抽象管理器)                  (模板方法生命周期)                │
+            │          ▲                              ▲                       │
+            │          │ 子类继承                     │ 子类继承               │
+            └──────────┼──────────────────────────────┼───────────────────────┘
                        │                              │
-            ┌──────────┴──────────────┐    ┌──────────┴────────────────┐
-            │  SandboxExtManagerBase   │    │  SandboxedWorkspaceExtBase│
-            │   + backend_kind        │    │   + sandbox_kind           │
-            │   + manager_metrics()   │    │   + metrics()              │
-            │   (本包)                 │    │   + verify_runtime_available()│
-            └─────┬──────┬──────┬──────┘    └─────┬──────┬──────┬────────┘
-                  │      │      │                  │      │      │
-            ┌─────┴─┐ ┌──┴──┐ ┌─┴────┐      ┌─────┴─┐ ┌──┴──┐ ┌─┴────┐
-            │ FC Mgr│ │GVis │ │Kata  │      │ FC WS │ │GVis │ │Kata  │
-            │       │ │ Mgr │ │ Mgr  │      │       │ │ WS  │ │ WS   │
-            └───┬───┘ └──┬──┘ └──┬───┘      └───┬───┘ └──┬──┘ └──┬───┘
-                │        │       │              │        │       │
-                └────────┴───────┴──────────────┴────────┴───────┘
+            ┌──────────┴──────────────┐    ┌──────────┴──────────────────────┐
+            │  SandboxExtManagerBase   │    │  SandboxedWorkspaceExtBase      │
+            │   + backend_kind         │    │   + sandbox_kind                │
+            │   + manager_metrics()    │    │   + metrics()                   │
+            │   (本包)                 │    │   + verify_runtime_available()  │
+            └─────┬──────┬─────┬───────┘    └──┬──────┬─────┬─────┬───────────┘
+                  │      │     │               │      │     │     │
+            ┌─────┴─┐ ┌──┴──┐ ┌─┴───┐ ┌──────┐ ┌┴────┐ ┌─┴──┐ ┌─┴──┐ ┌─┴────┐
+            │ FC Mgr│ │GVis │ │Kata │ │Sysbox│ │FC WS│ │GVis│ │Kata│ │Sysbox│
+            │       │ │ Mgr │ │ Mgr │ │ Mgr  │ │     │ │ WS │ │ WS │ │  WS  │
+            └───┬───┘ └──┬──┘ └──┬──┘ └──┬───┘ └──┬──┘ └──┬──┘ └──┬──┘ └──┬───┘
+                │        │       │      │       │       │      │      │
+                └────────┴───────┴──────┴───────┴───────┴──────┴──────┘
                                   │
                           (可选) SandboxPool
                                   │
@@ -46,6 +46,10 @@
                           │  空闲驱逐        │
                           │  容量上限        │
                           └────────────────┘
+
+        注：`AgentFSWorkspace`（VFS 后端）直接继承自
+        `SandboxedWorkspaceExtBase`，没有对应的 manager —— 它是一个
+        仅有 workspace 层、零运行时的基线后端（也不挂池化层）。
 ```
 
 ### 为什么是两个基类而不是一个？
@@ -61,6 +65,8 @@ agentScope 把 workspace 的*生命周期*（`SandboxedWorkspaceBase` —— 网
 | Firecracker | `$PATH` 上的 `firecracker --version`、`/dev/kvm` 可写、内核 + rootfs 存在 |
 | gVisor | `$PATH` 上的 `runsc --version`、Docker daemon 对 `/v1.41/info` 响应 |
 | Kata | `$PATH` 上的 `kata-runtime --version`、Docker daemon 响应 |
+| Sysbox | Docker daemon 在 `docker info --format '{{json .Runtimes}}'` 中报告 `sysbox-runc` / `sysbox` 之一 |
+| VFS (`agentfs`) | 始终成功 —— 纯 Python，无需主机运行时 |
 
 ## Firecracker 后端
 
@@ -90,15 +96,15 @@ agentScope 把 workspace 的*生命周期*（`SandboxedWorkspaceBase` —— 网
 
 guest agent 是一个纯标准库 Python 脚本，内置在 rootfs 中。它监听 `AF_VSOCK` 并使用长度前缀 JSON 协议。同一份源码字符串也被测试套件以 Unix-socket 传输方式进行验证，因此线协议可以端到端验证，CI 中无需运行真实 microVM。
 
-## gVisor / Kata 后端
+## gVisor / Kata / Sysbox 后端
 
-这两个后端完整复用 `agentscope.workspace.DockerWorkspace` 的流程（镜像构建、bind-mount、网关引导），仅覆盖 `HostConfig.Runtime`：
+这三个后端完整复用 `agentscope.workspace.DockerWorkspace` 的流程（镜像构建、bind-mount、网关引导），仅覆盖 `HostConfig.Runtime`：
 
 ```python
 config = {
     "Image": self._image_tag,
     "HostConfig": {
-        "Runtime": self._runtime,   # "runsc" 或 "kata-fc"
+        "Runtime": self._runtime,   # "runsc" | "kata-fc" | "sysbox-runc"
         "Binds": [...],
     },
     ...
@@ -106,6 +112,22 @@ config = {
 ```
 
 这是最小的 delta —— 其他所有关注点（网关端口、MCP 持久化、技能注入）均原样继承。
+
+各 runtime 的差异：
+
+- **gVisor** (`runsc`) —— 应用级内核；Sentry 在用户态拦截系统调用，无需 VM 即可提供较强隔离。
+- **Kata** (`kata-fc` / `kata-qemu` / ...) —— 每个容器都运行在由硬件 hypervisor 支撑的轻量 VM 内，兼具 VM 级隔离与容器易用性。
+- **Sysbox** (`sysbox-runc` / `sysbox`) —— 每个容器拥有独立的 user/mount namespace、虚拟化的 `/proc` 与 `/sys`，以及无需 `--privileged` 的 Docker-in-Docker；比完整 VM 更轻。
+
+## VFS / `agentfs` 后端
+
+`AgentFSWorkspace` 是零运行时基线：它将 `BackendBase` 原语（`exec_shell` / `read_file` / `write_file`）翻译为针对每个 workspace 目录的主机 I/O + `asyncio.subprocess`。
+
+- **无需 Docker / Firecracker / Kata 运行时验证** —— `verify_runtime_available()` 始终成功。
+- **无镜像构建、无容器启动、无 guest agent** —— provisioning 仅是一次 `os.makedirs` 加一个 Python 对象构造（微秒级开销）。
+- **无 manager、无 `SandboxPool`** —— `AgentFSWorkspace` 直接构造。"始终热、始终廉价"的特性使池化失去意义。
+
+这使 `agentfs` 成为天然的 CI / 开发 / 基准测试基线：它以真实 I/O 与真实子进程跑完整沙箱 workspace 生命周期（provision → initialize → exec → teardown），却不需要任何主机运行时。设计详见 `docs/VFS.md`，作为"理论上限"在冷启动基准中的角色见 `docs/PERFORMANCE.md`。
 
 ## 池化层
 
@@ -141,10 +163,12 @@ class FirecrackerWorkspaceManager(SandboxExtManagerBase):
 
 ## 为什么不只做一个后端？
 
-三种后端覆盖了隔离 / 开销权衡曲线上三个不同的点：
+五种后端覆盖了隔离 / 开销权衡曲线上不同的点：
 
 - **Firecracker** —— 最强隔离（独立内核），亚秒级冷启动，但需要 KVM 和 rootfs。
 - **gVisor** —— 容器级速度，应用级内核，无 VM 开销，但 Sentry 不是完整内核。
 - **Kata** —— VM 级隔离 + 容器易用性，但比 gVisor 更重。
+- **Sysbox** —— 每容器独立的 user/mount namespace 与虚拟化的 `/proc` / `/sys`（无需 `--privileged` 即可 Docker-in-Docker）；在隔离轴上介于 `runc` 与 Kata 之间。
+- **VFS (`agentfs`)** —— 零隔离、零运行时、微秒级 provisioning。CI / 开发 / 基准测试基线 —— 代表"无需隔离时 workspace 能达到的理论上限速度"。
 
-管理面可以同时提供三者，并按 per-agent 隔离策略选择 —— 统一的 `SandboxedWorkspaceExtBase` 判别符让路由变得平凡。
+管理面可以提供任意子集，并按 per-agent 隔离策略选择 —— 统一的 `SandboxedWorkspaceExtBase` 判别符让路由变得平凡。

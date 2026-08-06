@@ -12,23 +12,10 @@ are exchanged over the wire.
 
 from __future__ import annotations
 
-import importlib.util
-import os
-import socket
 import sys
-import tempfile
-import threading
 from pathlib import Path
-
-import pytest
 
 # Make ``tests/_helpers`` importable as a package.
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-
-@pytest.fixture
-def tmp_workspace_dir(tmp_path: Path) -> Path:
-    """A fresh temporary directory for test artefacts."""
-    return tmp_path

@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Any, Self, TypeVar
+from typing import Any, Self
 
 from agentscope._logging import logger
 from agentscope.app.workspace_manager._base import IsolationPolicy
@@ -34,9 +34,6 @@ from .._base import SandboxedWorkspaceExtBase, SandboxExtManagerBase
 from .._pool import SandboxPool
 
 DEFAULT_SWEEP_INTERVAL = 300.0
-
-#: Type variable bound to a :class:`DockerWorkspace` subclass.
-W = TypeVar("W", bound=DockerWorkspace)
 
 
 class DockerRuntimeWorkspaceManagerBase(SandboxExtManagerBase):
